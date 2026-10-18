@@ -127,6 +127,13 @@ fn main() -> Result<()> {
         for arg in cfg["args"].as_array().context("missing app args")?{args.push(arg.as_str().context("invalid app arg")?.to_owned());}
         unsafe extern "C" { fn mk8ShowMacSettings() -> i32; }
         if unsafe { mk8ShowMacSettings() } == 0 { return Ok(()); }
+        if let Some(overrides) = std::env::var_os("NX_MAC_LAUNCH_ARGS") {
+            let overrides: Vec<String> = serde_json::from_str(&overrides.to_string_lossy())
+                .context("invalid Mac launcher arguments")?;
+            args.truncate(1);
+            args.extend(overrides);
+            unsafe { std::env::remove_var("NX_MAC_LAUNCH_ARGS"); }
+        }
         Args::parse_from(args)
     } else {Args::parse()};
     start(args)?;

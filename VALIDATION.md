@@ -40,3 +40,27 @@ language were not separately retested in this source publishing pass.
   LAN removes the environment override while retaining the saved address.
 - Both local packaging entry points reject --network lanplay without --server.
 - Public LAN-Play server matchmaking/racing was not tested.
+
+## Mac launcher settings parity (2026-10-18)
+
+- Final Mac Release build passed. All three local app variants were regenerated
+  with the new executable and their existing game/save configuration. Their
+  ad-hoc signatures passed strict verification, code sections match the final
+  build, and all three configurations passed the actual data/module path checks.
+- `tools/verify_mac_launcher.swift`, compiled with the actual Mac launcher source,
+  passed synthetic-data checks for persisted settings, unknown-key preservation,
+  both directions of all new environment switches, stale relay/language removal,
+  missing required files and modules, optional firmware/DLC, DLC removal, Unicode
+  and space-containing file paths, restoration of bundle paths, and the JSON
+  argument handoff consumed by the Rust app entry point.
+- This check creates only disposable synthetic files and performs no networking:
+
+```sh
+xcrun swiftc -parse-as-library macos/Launcher.swift tools/verify_mac_launcher.swift -o /tmp/verify-mac-launcher
+/tmp/verify-mac-launcher
+```
+
+- The computer-use native connection failed during the fresh GUI check (native
+  pipe closed, including after reconnect). Window rendering, native file-panel
+  interaction and the denied-permission UI were not verified in this pass. No
+  fresh game/race run is claimed for this launcher-only update.

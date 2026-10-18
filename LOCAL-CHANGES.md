@@ -80,3 +80,11 @@ the offline instruction verification tool.
 * Add Online/Server selection to the embedded Mac settings, persist the relay
   address, reject empty addresses, and pass NX_LANPLAY_SERVER only in LAN-Play
   mode. Expose --network lanplay --server in the portable Mac app packager.
+
+* Bring the embedded Mac launcher to iOS game-setting parity: prewarm, background
+  compilation, rumble, motion and console mode; persist edits immediately and
+  clear presence-based flags when disabled. Add a scrollable/resizable layout,
+  required/optional file and module checks, in-place file selection with Rust
+  argument handoff, DLC removal, original-path restore, memory and folder/log
+  status, and local-network denial diagnostics. Do not add an outgoing Mac
+  controller mode. Include synthetic-data launcher behavior verification.

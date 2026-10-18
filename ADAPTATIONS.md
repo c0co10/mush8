@@ -18,8 +18,9 @@ It retains the upstream GPL-3.0 license and author notices.
   runtime 64-bit division, and shader caches use a revised resource ABI.
 - Focused Mac keyboard input, cleared when focus is lost.
 - Persistent iOS game-language selection, including system language.
-- An embedded Mac settings window for local app bundles: language, phone-pad
-  hosting and off/LAN/Online (LAN-Play)/Wireless. It reuses upstream phone and wireless transports.
+- An embedded Mac settings window for local app bundles with iOS game-setting
+  parity: language, networking, phone pads, rumble, motion, console mode, pipeline
+  prewarming and background shader compilation, plus file and memory status.
 
 The missing-resource and camera hooks are specific to MK8 Deluxe **4.0.1**, main
 build ID `158c0c7399aabd7bf83795c2ef3484c700000000000000000000000000000000`.
@@ -79,6 +80,43 @@ Use `--base-nca /path/to/base-program.nca` when you already extracted that NCA;
 this does not itself extract an XCI. The embedded settings window defaults phone
 controllers on. Upstream `make-app.sh` and its original launcher remain available
 for the normal firmware-backed setup.
+
+### Mac launcher settings and files
+
+The embedded launcher exposes the iOS game settings on Mac. Changes save
+immediately, including when the window is closed without starting a game.
+
+| Setting | Mac behavior |
+| --- | --- |
+| Game language | System language or the same language choices as iOS |
+| Multiplayer | Off, LAN, Online/Server and Wireless |
+| iPhone controllers | Hosts the existing phone-pad transport |
+| Vibration / motion controls | Uses the existing runtime support; requires compatible controller hardware |
+| Console mode | Docked 1080p or Handheld 720p; native aspect adaptation remains active |
+| Prewarm pipelines | Builds recorded, available pipelines on utility workers; existing local defaults are retained |
+| Background shader compiling | Asynchronous compilation when enabled, synchronous waiting when disabled |
+| Game files | Required/optional status, choose existing files or firmware directory, remove DLC, restore original paths |
+| System status | Available-memory estimate refreshed every two seconds, data/save folder and log shortcuts |
+| Local network permission | Shows a denied-access message and a shortcut to macOS privacy settings |
+
+Mac file selection references the selected files in place instead of copying
+large archives. Multiple DLC NSPs are supported. Selections persist separately
+for each application bundle. The Rust host receives the selected paths before
+initializing game files. Missing/empty/unreadable required files or rewritten
+modules disable Start; a selected missing DLC must be replaced or removed.
+Firmware remains optional for this branch's compatibility path. Changing the
+update does not regenerate rewritten modules: use the same 4.0.1 game build.
+
+The settings content scrolls and the Start button stays at the bottom of the
+resizable window. Mac defaults retain the previous local behavior (Docked,
+prewarm off unless explicitly configured), rather than changing existing saved
+preferences. Disabling prewarm or enabling background compilation removes the
+corresponding presence-based environment flag; a string value of `0` would
+incorrectly leave those features enabled.
+
+As requested for the local integration, Mac does not gain an outgoing
+"use this Mac as another Mac's controller" mode. Its existing ability to receive
+phone controllers is retained.
 
 ## iOS
 
