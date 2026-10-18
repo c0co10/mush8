@@ -23,6 +23,25 @@ const STICK_DIRS: u32 = 16;
 
 const STICK_MAX: f32 = 32767.0;
 
+// AppKit events also cover keyboards that do not appear through GameController.
+#[cfg(target_os = "macos")]
+static APPKIT_KEYS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+#[cfg(target_os = "macos")]
+pub fn appkit_key(code: u16, pressed: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if code < 128 {
+        let word = &APPKIT_KEYS[code as usize / 64];
+        let bit = 1 << (code % 64);
+        if pressed { word.fetch_or(bit, Relaxed); } else { word.fetch_and(!bit, Relaxed); }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn clear_appkit_keys() {
+    for word in &APPKIT_KEYS { word.store(0, std::sync::atomic::Ordering::Relaxed); }
+}
+
 fn scripted(player: usize) -> u64 {
     static SCRIPT: std::sync::LazyLock<Vec<(f32, u64, usize)>> = std::sync::LazyLock::new(|| {
         let names = [
@@ -367,8 +386,44 @@ impl Acc {
 
     unsafe fn keyboard(&mut self) {
         unsafe {
-            let Some(k) = GCKeyboard::coalescedKeyboard().and_then(|k| k.keyboardInput()) else { return };
-            let down = |code: GCKeyCode| k.buttonForKeyCode(code).is_some_and(|b| b.isPressed());
+            let k = GCKeyboard::coalescedKeyboard().and_then(|k| k.keyboardInput());
+            let down = |code: GCKeyCode| {
+                let hardware = k.as_ref().and_then(|k| k.buttonForKeyCode(code)).is_some_and(|b| b.isPressed());
+                #[cfg(target_os = "macos")]
+                {
+                    let codes = [
+                        (GCKeyCodeKeyX, 7usize),
+                        (GCKeyCodeReturnOrEnter, 36usize),
+                        (GCKeyCodeKeyZ, 6usize),
+                        (GCKeyCodeDeleteOrBackspace, 51usize),
+                        (GCKeyCodeKeyC, 8usize),
+                        (GCKeyCodeKeyV, 9usize),
+                        (GCKeyCodeKeyQ, 12usize),
+                        (GCKeyCodeKeyE, 14usize),
+                        (GCKeyCodeOne, 18usize),
+                        (GCKeyCodeThree, 20usize),
+                        (GCKeyCodeEqualSign, 24usize),
+                        (GCKeyCodeTab, 48usize),
+                        (GCKeyCodeHyphen, 27usize),
+                        (GCKeyCodeLeftArrow, 123usize),
+                        (GCKeyCodeUpArrow, 126usize),
+                        (GCKeyCodeRightArrow, 124usize),
+                        (GCKeyCodeDownArrow, 125usize),
+                        (GCKeyCodeKeyA, 0usize),
+                        (GCKeyCodeKeyD, 2usize),
+                        (GCKeyCodeKeyS, 1usize),
+                        (GCKeyCodeKeyW, 13usize),
+                        (GCKeyCodeKeyJ, 38usize),
+                        (GCKeyCodeKeyL, 37usize),
+                        (GCKeyCodeKeyK, 40usize),
+                        (GCKeyCodeKeyI, 34usize),
+                    ];
+                    let Some((_, mac)) = codes.iter().find(|(gc, _)| *gc == code) else { return hardware };
+                    hardware || APPKIT_KEYS[mac / 64].load(std::sync::atomic::Ordering::Relaxed) & (1 << (mac % 64)) != 0
+                }
+                #[cfg(not(target_os = "macos"))]
+                { hardware }
+            };
             let keys = [
                 (GCKeyCodeKeyX, A),
                 (GCKeyCodeReturnOrEnter, A),
