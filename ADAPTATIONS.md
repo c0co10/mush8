@@ -19,7 +19,7 @@ It retains the upstream GPL-3.0 license and author notices.
 - Focused Mac keyboard input, cleared when focus is lost.
 - Persistent iOS game-language selection, including system language.
 - An embedded Mac settings window for local app bundles: language, phone-pad
-  hosting and off/LAN/Wireless. It reuses upstream phone and wireless transports.
+  hosting and off/LAN/Online (LAN-Play)/Wireless. It reuses upstream phone and wireless transports.
 
 The missing-resource and camera hooks are specific to MK8 Deluxe **4.0.1**, main
 build ID `158c0c7399aabd7bf83795c2ef3484c700000000000000000000000000000000`.
@@ -116,6 +116,25 @@ Local testing confirmed Mac/iPhone room joins, race entry and vehicle movement
 synchronization on the same Wi-Fi. Router-free AWDL, Switch interoperability and
 full-length race endurance were not verified. These are limited smoke tests,
 not a claim of complete game compatibility.
+
+### Online / Server on Mac
+
+In the embedded Mac settings window, choose **Online · Server** and enter the
+same LAN-Play server host/IP and optional port as the iPhone's Online mode.
+The address is trimmed and saved when you start the game. Empty addresses disable
+Start; changing to LAN/Wireless/off removes the server override for that launch.
+A server entered previously remains available when you select Online again.
+The existing LAN-Play transport uses port 11451 when omitted and supports servers
+without a login requirement. Use the corresponding Online entry in the game.
+
+The portable packager also accepts:
+
+```sh
+python3 tools/make_local_app.py --game-dir /path/to/game --network lanplay --server example.org:11451
+```
+
+The settings, persistence and launch environment have been checked locally;
+public-server matchmaking/racing was not tested in this change.
 
 ## Validation
 

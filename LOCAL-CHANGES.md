@@ -76,3 +76,7 @@ the offline instruction verification tool.
   verification tools. Generated resources and personal paths are not committed.
 * Wire FIRMWARE_FREE=1 into the iOS build and bundle its local fallback font.
   Keep the baked empty-avatar factory initialized if firmware is imported later.
+
+* Add Online/Server selection to the embedded Mac settings, persist the relay
+  address, reject empty addresses, and pass NX_LANPLAY_SERVER only in LAN-Play
+  mode. Expose --network lanplay --server in the portable Mac app packager.

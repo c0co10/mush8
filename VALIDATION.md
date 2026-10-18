@@ -30,3 +30,13 @@ installation test of this publishing checkout's updated packaging scripts.
 Full-length races, complete game coverage, router-free AWDL and a real Switch
 peer have not been verified. Existing firmware-backed operation and every game
 language were not separately retested in this source publishing pass.
+
+## Mac Online/Server follow-up (2026-10-18)
+
+- Mac Release build passed after adding the Online selection and Server field.
+- The actual SwiftUI settings component was exercised in an isolated local probe:
+  an empty address disables Start; a padded address is trimmed, persisted and
+  passed as NX_NET=lanplay / NX_LANPLAY_SERVER; reopening restores it; selecting
+  LAN removes the environment override while retaining the saved address.
+- Both local packaging entry points reject --network lanplay without --server.
+- Public LAN-Play server matchmaking/racing was not tested.

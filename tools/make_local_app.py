@@ -17,10 +17,13 @@ def main():
     parser.add_argument('--npdm', type=Path, default=root / 'work/v-upd/exefs/main.npdm')
     parser.add_argument('--runtime', type=Path, default=root / 'target/release/nxhost')
     parser.add_argument('--font', type=Path, default=root / 'work/host-font.ttf')
-    parser.add_argument('--network', choices=['off', 'lan', 'wireless'], default='off')
+    parser.add_argument('--network', choices=['off', 'lan', 'lanplay', 'wireless'], default='off')
+    parser.add_argument('--server', default='', help='LAN-Play server host[:port] for --network lanplay')
     parser.add_argument('--language', default='system')
     parser.add_argument('--output', type=Path, default=root / 'build/MK8 Native.app')
     args = parser.parse_args()
+    if args.network == 'lanplay' and not args.server.strip():
+        parser.error('--network lanplay requires --server host[:port]')
     game = args.game_dir.resolve()
     runtime, patched, npdm, font = [p.resolve() for p in [args.runtime, args.patched, args.npdm, args.font]]
     base = args.base_nca.resolve() if args.base_nca else game / 'base.nsp'
@@ -41,6 +44,8 @@ def main():
         command += ['--dlc', str(game / 'dlc.nsp')]
     env = {'NX_WINDOWED': '1', 'NX_PHONE_PADS': '1', 'NX_NET': args.network,
            'NX_SHADER_CACHE': str(state / 'shader-cache')}
+    if args.network == 'lanplay':
+        env['NX_LANPLAY_SERVER'] = args.server.strip()
     if font.is_file():
         env['NX_FALLBACK_FONT'] = str(font)
     if args.language != 'system':
