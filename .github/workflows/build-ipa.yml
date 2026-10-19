@@ -19,9 +19,11 @@ jobs:
         env:
           BASE_NSP_URL: ${{ secrets.BASE_NSP_URL }}
           UPDATE_NSP_URL: ${{ secrets.UPDATE_NSP_URL }}
+          PROD_KEYS_URL: ${{ secrets.PROD_KEYS_URL }}
         run: |
           curl -L --fail -o base.nsp "$BASE_NSP_URL"
           curl -L --fail -o upd4-0-1.nsp "$UPDATE_NSP_URL"
+          curl -L --fail -o prod.keys "$PROD_KEYS_URL"
 
       - name: Build IPA
         run: ./make-ios.sh --ipa
