@@ -1,0 +1,32 @@
+name: Build Mush8 IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          brew install rustup xcodegen
+          rustup default stable
+          rustup target add aarch64-apple-ios
+
+      - name: Download game files
+        env:
+          BASE_NSP_URL: ${{ secrets.BASE_NSP_URL }}
+          UPDATE_NSP_URL: ${{ secrets.UPDATE_NSP_URL }}
+        run: |
+          curl -L --fail -o base.nsp "$BASE_NSP_URL"
+          curl -L --fail -o upd4-0-1.nsp "$UPDATE_NSP_URL"
+
+      - name: Build IPA
+        run: ./make-ios.sh --ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mush8-ipa
+          path: build/Mush8.ipa
