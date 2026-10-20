@@ -20,15 +20,27 @@ jobs:
           BASE_NSP_URL: ${{ secrets.BASE_NSP_URL }}
           UPDATE_NSP_URL: ${{ secrets.UPDATE_NSP_URL }}
           PROD_KEYS_URL: ${{ secrets.PROD_KEYS_URL }}
+          DLC_NSP_URL: ${{ secrets.DLC_NSP_URL }}
         run: |
           curl -L --fail -o base.nsp "$BASE_NSP_URL"
           curl -L --fail -o upd4-0-1.nsp "$UPDATE_NSP_URL"
           curl -L --fail -o prod.keys "$PROD_KEYS_URL"
+          if [ -n "$DLC_NSP_URL" ]; then
+            curl -L --fail -o dlc.nsp "$DLC_NSP_URL"
+          fi
 
       - name: Build IPA
         run: ./make-ios.sh --ipa
 
+      - name: Prepare artifact
+        run: |
+          mkdir -p build/artifact
+          cp build/Mush8.ipa build/artifact/
+          if [ -f dlc.nsp ]; then
+            cp dlc.nsp build/artifact/
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: Mush8-ipa
-          path: build/Mush8.ipa
+          path: build/artifact/*
