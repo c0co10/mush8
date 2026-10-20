@@ -162,6 +162,8 @@ pub static SLOT_NAMES: std::sync::Mutex<[Option<String>; MAX_PLAYERS]> = std::sy
 pub struct Pads {
     slots: [Option<objc2::rc::Retained<GCController>>; MAX_PLAYERS],
     phones: [Option<std::net::SocketAddr>; MAX_PLAYERS],
+    usb_id: u64,
+    usb_slot: Option<usize>,
     extra: usize,
     touch_init: bool,
     phone: Phone,
@@ -170,15 +172,15 @@ pub struct Pads {
 impl Pads {
     pub fn new() -> Self {
         let extra = std::env::var("NX_EXTRA_PADS").ok().and_then(|v| v.parse().ok()).unwrap_or(0usize).min(MAX_PLAYERS - 1);
-        Self { slots: Default::default(), phones: Default::default(), extra, touch_init: false, phone: Default::default() }
+        Self { slots: Default::default(), phones: Default::default(), extra, usb_id: 0, usb_slot: None, touch_init: false, phone: Default::default() }
     }
 
     pub fn poll(&mut self) -> [Option<PadState>; MAX_PLAYERS] {
-        let had_pad = self.slots[0].is_some();
+        let had_pad = self.slots[0].is_some() || self.usb_slot == Some(0);
         let out = self.poll_pads();
-        if self.slots[0].is_some() != had_pad || !self.touch_init {
+        if (self.slots[0].is_some() || self.usb_slot == Some(0)) != had_pad || !self.touch_init {
             self.touch_init = true;
-            crate::gfx::set_touch_controls(self.slots[0].is_none());
+            crate::gfx::set_touch_controls(self.slots[0].is_none() && self.usb_slot != Some(0));
         }
         out
     }
@@ -186,7 +188,16 @@ impl Pads {
     fn poll_pads(&mut self) -> [Option<PadState>; MAX_PLAYERS] {
         objc2::rc::autoreleasepool(|_| unsafe {
             let connected: Vec<_> = GCController::controllers().iter().filter(|c| c.extendedGamepad().is_some()).collect();
+            #[cfg(target_os = "macos")]
+            let usb = crate::wolverine::poll(connected.iter().any(|c| c.vendorName().is_some_and(|n| n.to_string().to_lowercase().contains("wolverine"))));
+            #[cfg(not(target_os = "macos"))]
+            let usb: Option<(u64, PadState)> = None;
             let mut changed = false;
+            if self.usb_id != usb.as_ref().map_or(0, |(id, _)| *id) {
+                if let Some(i) = self.usb_slot.take() { eprintln!("[input] Razer USB controller left player {}", i + 1); }
+                self.usb_id = usb.as_ref().map_or(0, |(id, _)| *id);
+                changed = true;
+            }
             for s in self.slots.iter_mut() {
                 if s.as_ref().is_some_and(|c| !connected.iter().any(|n| std::ptr::eq(&**n, &**c))) {
                     *s = None;
@@ -201,12 +212,12 @@ impl Pads {
                     changed = true;
                 }
             }
-            let free = |slots: &[Option<_>; MAX_PLAYERS], phones: &[Option<_>; MAX_PLAYERS]| (0..MAX_PLAYERS).find(|&i| slots[i].is_none() && phones[i].is_none());
+            let free = |slots: &[Option<_>; MAX_PLAYERS], phones: &[Option<_>; MAX_PLAYERS], usb: Option<usize>| (0..MAX_PLAYERS).find(|&i| slots[i].is_none() && phones[i].is_none() && usb != Some(i));
             for c in connected {
                 if self.slots.iter().flatten().any(|s| std::ptr::eq(&**s, &*c)) {
                     continue;
                 }
-                if let Some(i) = free(&self.slots, &self.phones) {
+                if let Some(i) = free(&self.slots, &self.phones, self.usb_slot) {
                     if i < 4 {
                         c.setPlayerIndex(GCControllerPlayerIndex(i as isize));
                     }
@@ -220,11 +231,18 @@ impl Pads {
                     changed = true;
                 }
             }
+            if usb.is_some() && self.usb_slot.is_none() {
+                if let Some(i) = free(&self.slots, &self.phones, None) {
+                    self.usb_slot = Some(i);
+                    eprintln!("[input] Razer Wolverine V3 TE 8K PC (USB) is player {}", i + 1);
+                    changed = true;
+                }
+            }
             for &(addr, _) in &phones {
                 if self.phones.contains(&Some(addr)) {
                     continue;
                 }
-                let Some(i) = free(&self.slots, &self.phones) else {
+                let Some(i) = free(&self.slots, &self.phones, self.usb_slot) else {
                     crate::remote::set_player(addr, 0);
                     continue;
                 };
@@ -244,6 +262,14 @@ impl Pads {
                 if let Some(g) = slot.as_ref().and_then(|c| c.extendedGamepad()) {
                     acc.gamepad(&g);
                 }
+                let usb_pad = usb.as_ref().filter(|_| self.usb_slot == Some(i)).map(|(_, pad)| pad);
+                if let Some(pad) = usb_pad {
+                    acc.buttons |= pad.buttons;
+                    acc.lx += pad.left.0 as f32 / STICK_MAX;
+                    acc.ly += pad.left.1 as f32 / STICK_MAX;
+                    acc.rx += pad.right.0 as f32 / STICK_MAX;
+                    acc.ry += pad.right.1 as f32 / STICK_MAX;
+                }
                 let remote = self.phones[i].and_then(|a| phones.iter().find(|(p, _)| *p == a)).map(|(_, pad)| *pad);
                 if let Some(pad) = &remote {
                     acc.remote(pad);
@@ -254,11 +280,11 @@ impl Pads {
                         acc.touch();
                     }
                 }
-                let virtual_pad = i > 0 && slot.is_none() && virtual_left > 0;
+                let virtual_pad = i > 0 && slot.is_none() && usb_pad.is_none() && virtual_left > 0;
                 if virtual_pad {
                     virtual_left -= 1;
                 }
-                if i == 0 || slot.is_some() || remote.is_some() || virtual_pad {
+                if i == 0 || slot.is_some() || usb_pad.is_some() || remote.is_some() || virtual_pad {
                     out[i] = Some(acc.state());
                 }
                 let sample = if !motion_enabled() {
@@ -276,6 +302,7 @@ impl Pads {
                 }
                 let name = match slot {
                     Some(c) => Some(c.vendorName().map_or("Controller".into(), |n| n.to_string())),
+                    None if usb_pad.is_some() => Some("Razer Wolverine V3 TE 8K PC".into()),
                     None if remote.is_some() => Some("iPhone".into()),
                     None if i == 0 && cfg!(target_os = "ios") => Some("Touch controls".into()),
                     None if i == 0 => Some("Keyboard".into()),

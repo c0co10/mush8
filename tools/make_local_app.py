@@ -64,6 +64,8 @@ def main():
     (resources / 'launch.json').write_text(json.dumps({'cwd': str(state), 'args': command, 'env': env,
                                                      'log': str(state / 'nxhost.log')}, indent=2) + '\n')
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app)], check=True)
+    # Signing alone does not catch missing Swift @rpath dependencies.
+    subprocess.run([str(mac / 'nxhost'), '--help'], check=True, stdout=subprocess.DEVNULL)
     print(app)
 
 

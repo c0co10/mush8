@@ -118,6 +118,44 @@ As requested for the local integration, Mac does not gain an outgoing
 "use this Mac as another Mac's controller" mode. Its existing ability to receive
 phone controllers is retained.
 
+### Razer Wolverine V3 TE 8K PC on Mac
+
+The local Mac runtime includes a native IOUSBHost input route for USB
+`1532:0a5a`, interface 0 with class/subclass/protocol `ff/5d/01`. It references
+only Apple's system frameworks; it does not install a driver or depend on a
+Homebrew USB library. The launcher shows connection/readiness status.
+
+Connect the controller before or after launching. The route continuously queues
+interrupt reads, validates 20-byte XUSB state packets, and joins the first free
+player slot alongside existing GameController and iPhone pads. Unplugging clears
+its state and frees the slot. Existing OS-recognized Wolverine input is preferred.
+One exact-model raw USB controller is supported at a time.
+
+The physical Xbox layout matches the runtime's existing Xbox controllers:
+right-side **B** confirms as Switch A, bottom **A** cancels as Switch B; Y/X,
+LB/RB, LT/RT, Menu/View, stick clicks and both analog sticks are mapped.
+Sticks have radial dead zones and triggers use the normal digital threshold.
+Guide has no guest Home-menu action. Rear buttons follow firmware mappings and
+are not exposed as extra independent guest buttons. Raw USB rumble and motion
+are not implemented. This is support inside this runtime, not system-wide
+GameController or SDL registration. Other Razer models are not admitted.
+
+For a standalone transport check without game data, close any game/probe that
+already owns the controller, then build and run:
+
+```sh
+xcrun swiftc -parse-as-library macos/WolverineUSB.swift tools/verify_wolverine_usb.swift -o /tmp/verify-wolverine-usb
+/tmp/verify-wolverine-usb 30
+```
+
+Operate the buttons, sticks and triggers during that window. The tool prints
+readiness and changed XUSB snapshots. A successful open or LED alone does not
+verify live input.
+
+The IOUSBHost registry/API adaptation is attributed in
+`THIRD-PARTY-NOTICES.md`; the source project and installed signed driver are left
+unchanged. Current build and physical-input test coverage is in `VALIDATION.md`.
+
 ## iOS
 
 Follow upstream prerequisites and prepare the game files in the repository's

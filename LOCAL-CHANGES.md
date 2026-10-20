@@ -88,3 +88,13 @@ the offline instruction verification tool.
   argument handoff, DLC removal, original-path restore, memory and folder/log
   status, and local-network denial diagnostics. Do not add an outgoing Mac
   controller mode. Include synthetic-data launcher behavior verification.
+
+* Add app-local native IOUSBHost input for Wolverine V3 TE 8K PC 1532:0a5a,
+  gated by exact interface identity and XUSB report validation. Merge one raw
+  controller into player allocation, retain existing Xbox button positions,
+  apply stick dead zones and trigger thresholds, and clear state on disconnect.
+  Show USB readiness in the Mac launcher; preserve the existing OS-controller
+  and phone-pad paths. No driver installation or global virtual gamepad.
+* Add the system Swift library rpath to the Mac link, so launchers that use Swift
+  concurrency resolve their runtime before entering main. Exercise the packaged
+  executable's CLI help entry point during app creation to catch dyld failures.

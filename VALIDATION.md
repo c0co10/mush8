@@ -56,7 +56,7 @@ language were not separately retested in this source publishing pass.
 - This check creates only disposable synthetic files and performs no networking:
 
 ```sh
-xcrun swiftc -parse-as-library macos/Launcher.swift tools/verify_mac_launcher.swift -o /tmp/verify-mac-launcher
+xcrun swiftc -parse-as-library macos/Launcher.swift macos/WolverineUSB.swift tools/verify_mac_launcher.swift -o /tmp/verify-mac-launcher
 /tmp/verify-mac-launcher
 ```
 
@@ -64,3 +64,35 @@ xcrun swiftc -parse-as-library macos/Launcher.swift tools/verify_mac_launcher.sw
   pipe closed, including after reconnect). Window rendering, native file-panel
   interaction and the denied-permission UI were not verified in this pass. No
   fresh game/race run is claimed for this launcher-only update.
+
+## Razer Wolverine V3 TE 8K PC input (2026-10-19)
+
+- Fresh USB enumeration confirmed 1532:0a5a and interface 0 ff/5d/01.
+- The actual native IOUSBHost bridge captured live input: an initial run recorded
+  132 changed states including right-stick motion; a second run captured 115
+  changed states including Xbox A/B, left/right stick changes, 25 trigger pairs
+  and a final neutral state. Disconnect/reconnect transitions were observed.
+  The user confirmed the indicator lit after initialization. Opening the
+  interface alone was not considered a successful input test.
+- Mac Release build and 3 selected `wolverine::tests` passed, covering every
+  mapped button bit, packet validation, stick direction/dead zones, trigger
+  threshold and release, plus a captured-model A/RB/trigger combination.
+- The existing synthetic-data Mac launcher checks passed with the USB source
+  linked. They do not open a USB device or use game data.
+- Fixed a discovered startup regression: Swift concurrency was referenced by an
+  @rpath install name without an LC_RPATH. The Mac link now includes
+  /usr/lib/swift. The final runtime and all three signed local app copies passed
+  `--help` dynamic-loader startup checks; installed code matches the final build.
+- Portable local app packaging passed with the new packaged-startup check.
+  The standalone USB diagnostic compiled; its invalid-duration guard was checked
+  without interrupting the running game.
+- The real game log assigned the raw Razer controller to player 1 and continued
+  rendering. The user confirmed both menu navigation and vehicle control on
+  the final installed build.
+- GUI automation again failed (native pipe closed/timeout), so the user opened
+  the app manually. No agent-observed visual check is claimed.
+
+Rumble, motion, an independent rear-button mapping, Guide/Home handling,
+multiple simultaneous raw USB Wolverines and system-wide virtual-controller
+registration are outside this input implementation. Complete physical testing
+of every button and full-race endurance were not performed.

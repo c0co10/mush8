@@ -169,16 +169,21 @@ fn read_layout(path: &Path) -> (u64, u64) {
 }
 
 fn build_mac_launcher() {
+    println!("cargo:rerun-if-changed=../../macos/WolverineUSB.swift");
     println!("cargo:rerun-if-changed=../../macos/Launcher.swift");
     let out = std::env::var("OUT_DIR").unwrap();
     let status = std::process::Command::new("xcrun")
         .args(["swiftc", "-parse-as-library", "-emit-library", "-static", "-O", "-module-name", "MK8MacSettings"])
-        .arg("../../macos/Launcher.swift").arg("-o").arg(format!("{out}/libmk8macsettings.a"))
+        .args(["../../macos/Launcher.swift", "../../macos/WolverineUSB.swift"]).arg("-o").arg(format!("{out}/libmk8macsettings.a"))
         .status().expect("swiftc");
     assert!(status.success(), "Mac settings swiftc failed");
     println!("cargo:rustc-link-search=native={out}");
     println!("cargo:rustc-link-lib=static=mk8macsettings");
+    // Swift concurrency uses an @rpath install name, unlike the absolute Swift core libraries.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rustc-link-lib=framework=SwiftUI");
+    println!("cargo:rustc-link-lib=framework=IOUSBHost");
+    println!("cargo:rustc-link-lib=framework=IOKit");
     let result = std::process::Command::new("xcrun").args(["--sdk", "macosx", "--show-sdk-path"]).output().unwrap();
     let sdk = String::from_utf8(result.stdout).unwrap();
     println!("cargo:rustc-link-search=native={}/usr/lib/swift", sdk.trim());

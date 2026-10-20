@@ -10,6 +10,8 @@ mod guest;
 mod haptics;
 mod hle;
 mod input;
+#[cfg(target_os = "macos")]
+mod wolverine;
 mod ipc;
 mod kernel;
 mod loader;

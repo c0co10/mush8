@@ -25,6 +25,7 @@ struct LauncherFile: Identifiable {
     @Published var fileOverrides: [String: [String]] = [:] { didSet { save() } }
     @Published var availableMemory: UInt64 = 0
     @Published var fileStatus: [String: Bool] = [:]
+    @Published var controllerStatus = "Razer USB：尚未检测"
     @Published var networkDenied = false
     @Published var errorMessage: String?
 
@@ -122,6 +123,7 @@ struct LauncherFile: Identifiable {
         return ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.uint64Value ?? 0) > 0
     }
     func refresh() {
+        controllerStatus = WolverineUSB.shared.status
         var status: [String: Bool] = [:]
         for file in files {
             let paths = paths(for: file.id)
@@ -244,6 +246,8 @@ struct MK8LauncherView: View {
                     GroupBox("多人连接") { networkSettings.padding(6) }
                     GroupBox("控制器") {
                         VStack(alignment: .leading, spacing: 10) {
+                            Text(game.controllerStatus).font(.caption).foregroundStyle(.secondary)
+                            Text("支持直连 Wolverine V3 TE 8K PC（1532:0a5a），按键位置与现有 Xbox 手柄一致；此直连模式暂不提供震动或体感。").font(.caption).foregroundStyle(.secondary)
                             Toggle("震动 / Vibration", isOn: $game.rumble)
                             Toggle("体感控制 / Motion controls", isOn: $game.motion)
                             Text("震动和体感需要支持相应功能的控制器；Mac 键盘没有震动和陀螺仪。").font(.caption).foregroundStyle(.secondary)
@@ -287,7 +291,7 @@ struct MK8LauncherView: View {
                 Button("开始游戏") { game.play() }.keyboardShortcut(.defaultAction).disabled(!game.canStart)
             }
         }.padding(24).frame(minWidth: 600, idealWidth: 660, minHeight: 550, idealHeight: 790)
-        .onAppear { game.checkNetwork() }
+        .onAppear { game.checkNetwork(); WolverineUSB.shared.start() }
         .onDisappear { game.stopNetworkCheck() }
         .onChange(of: game.needsNetwork) { game.checkNetwork() }
         .onReceive(timer) { _ in game.refresh(); game.checkNetwork() }
