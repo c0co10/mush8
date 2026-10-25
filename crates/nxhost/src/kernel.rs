@@ -621,12 +621,15 @@ pub fn signal_to_address(addr: u64, kind: u32, value: i32, count: i32) -> u32 {
             }
         }
         2 => {
-            let new = if count <= 0 {
-                if waiting > 0 { value - 1 } else { value + 1 }
-            } else if waiting == 0 {
-                value + 1
-            } else if waiting <= count {
-                value - 1
+            let others = (waiting - 1).min(count.saturating_add(1));
+            let new = if waiting == 0 {
+                value.wrapping_add(1)
+            } else if count <= 0 {
+                value.wrapping_sub(2)
+            } else if others == 0 {
+                value.wrapping_add(1)
+            } else if others <= count {
+                value.wrapping_sub(1)
             } else {
                 value
             };

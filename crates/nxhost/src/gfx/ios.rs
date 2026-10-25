@@ -201,6 +201,18 @@ extern "C" fn play() {
     if let Some(mtm) = MainThreadMarker::new() {
         UIApplication::sharedApplication(mtm).setIdleTimerDisabled(true);
     }
+    UI.with(|ui| {
+        if let Some(ui) = ui.borrow().as_ref() {
+            let size = UICoordinateSpace::bounds(&*ui.window).size;
+            let inset = ui.window.safeAreaInsets();
+            let (long, short, edge) = if size.width >= size.height {
+                (size.width, size.height, inset.left.max(inset.right))
+            } else {
+                (size.height, size.width, inset.top.max(inset.bottom))
+            };
+            crate::aspect::set_screen(long, short, long - 2.0 * edge);
+        }
+    });
     if let Some(boot) = BOOT.lock().unwrap().take() {
         std::thread::Builder::new()
             .name("boot".into())

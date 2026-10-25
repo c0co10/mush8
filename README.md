@@ -13,16 +13,17 @@ On top of that, Mush8 adds LAN Play over the internet ([lan-play.com](https://ww
 Because Nintendo ninjas are always watching, you will need your own dump :
 - `prod.keys`
 - the base game (`.nsp`)
-- update 4.0.1 (`.nsp`)
+- update 4.0.1 or 3.0.5 (`.nsp`). To play LAN with a Switch, use the same update as the Switch
 - a `Firmware` folder dumped from your Switch (fonts, Miis)
-- optionally, the Booster Course Pass (`.nsp`)
+- optionally, the Booster Course Pass, named `dlc.nsp`
 
-Mush8 will then asks for them : on macOS pick the folder holding them in the launcher, on iOS import them from the app (or copy them in Files → On My iPhone → Mush8). File names don't matter
+Mush8 will then asks for them : on macOS pick the folder holding them in the launcher, on iOS import them from the app (or copy them in Files → On My iPhone → Mush8). File names don't matter, except for the Booster Course Pass : the macOS launcher remembers the last names it found, so name it `dlc.nsp` to be sure it is found
 
 ## Requirements
 - Apple Silicon Mac, macOS 14 or later
 - Rust toolchain
 - Xcode 26 or later
+- recommended : the Metal Toolchain, which Xcode 26 downloads separately (`xcodebuild -downloadComponent MetalToolchain`). Without it, Prepare can't compile the game's shaders ahead of time : the game still runs, but compiles them while you play, so new scenes (a race start for example) show black or missing graphics for a moment
 
 For iOS, also :
 - `rustup` with `rustup toolchain install 1.98.1` and `rustup target add aarch64-apple-ios --toolchain 1.98.1`
@@ -55,6 +56,12 @@ Or make an `.ipa` to install with AltStore / SideStore (no signing needed on the
 ```
 it ends up in `build/Mush8.ipa`
 
+Tests :
+```
+cargo test --workspace
+```
+They need no game files and no controller
+
 ## Multiplayer
 Pick a mode in the launcher, under Multiplayer :
 - LAN : players on the same network, a Switch can join too
@@ -71,6 +78,8 @@ The touchscreen works too : tap the game on iOS, click it on macOS
 Motion controls (gyro steering) are off by default, turn them on in the launcher
 
 An iPhone can be a controller too : open Mush8 on it and tap "Use as a controller for a Mac" (no game files needed). It finds the Mac running Mush8 on the same Wi-Fi and joins as the next player with its touch controls (and its motion, if Motion controls is on in the Mac launcher). Turn "iPhone controllers" on in the Mac launcher (it is by default), or on an iPad playing the game
+
+On macOS, if your controller or a part of it (for example rumble) does not work, set "Gamepad driver" to SDL in the launcher
 
 ## Limitations
 - free Apple IDs and the `.ipa` (AltStore / SideStore) don't get the extended virtual addressing entitlement, so the game runs with a smaller 5 GB memory layout there (a paid account gets the full one)

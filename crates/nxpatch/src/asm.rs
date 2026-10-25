@@ -68,6 +68,37 @@ pub fn blr(n: Reg) -> u32 {
 pub fn brk(imm: u16) -> u32 {
     0xD420_0000 | ((imm as u32) << 5)
 }
+pub fn str_q(t: Reg, n: Reg, off: u32) -> u32 {
+    debug_assert!(off % 16 == 0 && off / 16 < 4096);
+    0x3D80_0000 | ((off / 16) << 10) | (n << 5) | t
+}
+pub fn ldr_q(t: Reg, n: Reg, off: u32) -> u32 {
+    str_q(t, n, off) | 0x0040_0000
+}
+pub fn str_s(t: Reg, n: Reg, off: u32) -> u32 {
+    debug_assert!(off % 4 == 0 && off / 4 < 4096);
+    0xBD00_0000 | ((off / 4) << 10) | (n << 5) | t
+}
+pub fn ldr_s(t: Reg, n: Reg, off: u32) -> u32 {
+    str_s(t, n, off) | 0x0040_0000
+}
+pub fn is_str_s(w: u32) -> bool {
+    w & 0xFFC0_0000 == 0xBD00_0000
+}
+pub fn fmov_w_s(d: Reg, n: Reg) -> u32 {
+    0x1E26_0000 | (n << 5) | d
+}
+pub fn fmul_s(d: Reg, n: Reg, m: Reg) -> u32 {
+    0x1E20_0800 | (m << 16) | (n << 5) | d
+}
+pub fn lsl_w(d: Reg, n: Reg, shift: u32) -> u32 {
+    debug_assert!((1..32).contains(&shift));
+    0x5300_0000 | ((32 - shift) << 16) | ((31 - shift) << 10) | (n << 5) | d
+}
+pub fn cbz_w(t: Reg, off: i32) -> u32 {
+    debug_assert!(off % 4 == 0 && imm_fits(off as i64 / 4, 19));
+    0x3400_0000 | (((off / 4) as u32 & 0x7FFFF) << 5) | t
+}
 
 pub fn b(from: u64, to: u64) -> Result<u32> {
     let d = (to as i64 - from as i64) / 4;
@@ -200,6 +231,14 @@ mod tests {
         assert_eq!(stp_pre(16, 30, SP, -16), 0xA9BF_7BF0);
         assert_eq!(ldp_post(16, 30, SP, 16), 0xA8C1_7BF0);
         assert_eq!(blr(30), 0xD63F_03C0);
+        assert_eq!(str_q(1, SP, 16), 0x3D80_07E1);
+        assert_eq!(ldr_q(1, SP, 16), 0x3DC0_07E1);
+        assert_eq!(ldr_s(1, 16, 0x50), 0xBD40_5201);
+        assert_eq!(str_s(0, 9, 0xB0), 0xBD00_B120);
+        assert_eq!(fmov_w_s(17, 1), 0x1E26_0031);
+        assert_eq!(lsl_w(17, 17, 1), 0x531F_7A31);
+        assert_eq!(cbz_w(17, 8), 0x3400_0051);
+        assert_eq!(fmul_s(0, 0, 1), 0x1E21_0800);
     }
 
     #[test]

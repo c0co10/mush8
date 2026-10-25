@@ -9,7 +9,7 @@ use objc2_core_video::*;
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, channel, sync_channel};
 use std::sync::{LazyLock, Mutex};
 
 static SEEKS: LazyLock<Mutex<HashMap<u64, i64>>> = LazyLock::new(Default::default);
@@ -51,7 +51,23 @@ impl FrameSource {
                 None => return false,
             }
         }
-        let Ok(mut frame) = self.worker.frames.recv() else { return false };
+        let mut frame = match self.worker.frames.recv_timeout(std::time::Duration::from_millis(250)) {
+            Ok(f) => f,
+            Err(RecvTimeoutError::Disconnected) => return false,
+            Err(RecvTimeoutError::Timeout) => {
+                static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!("[movie] video decoder is late: showing the previous frame");
+                }
+                let (stride, rows) = self.layout;
+                if out.len() != stride * rows * 3 / 2 {
+                    out.clear();
+                    out.resize(stride * rows * 3 / 2, 0);
+                    out[stride * rows..].fill(128);
+                }
+                return true;
+            }
+        };
         std::mem::swap(out, &mut frame);
         let _ = self.worker.recycle.send(frame);
         true
@@ -78,7 +94,7 @@ fn spawn(source: Source, us: i64, stride: usize, rows: usize) -> Option<Worker> 
             }
         })
         .ok()?;
-    ready.recv().ok()?.then_some(Worker { frames, recycle })
+    ready.recv_timeout(std::time::Duration::from_secs(5)).ok()?.then_some(Worker { frames, recycle })
 }
 
 fn run_webm(movie: &super::webm::Movie, us: i64, tx: &SyncSender<Vec<u8>>, spare: &Receiver<Vec<u8>>, stride: usize, rows: usize) {

@@ -185,6 +185,8 @@ pub fn load(dir: &Path, names: &[&str], hle: &HashMap<&str, u64>) -> Result<Vec<
     let cnt_mul = ((nxabi::GUEST_TICK_HZ as u128) << 64) / freq as u128;
     ensure!(cnt_mul < 1 << 64, "host counter slower than 19.2 MHz");
     let slot = crate::guest::NX_CTX_SLOT.load(std::sync::atomic::Ordering::Relaxed);
+    let display = display_config();
+    let split_div = split_div();
     for m in &mods {
         let kp = m.base + m.keypage;
         unsafe {
@@ -192,6 +194,11 @@ pub fn load(dir: &Path, names: &[&str], hle: &HashMap<&str, u64>) -> Result<Vec<
             *((kp + keypage::SVC_GATE as u64) as *mut u64) = crate::guest::nx_svc_gate as *const () as usize as u64;
             *((kp + keypage::CNT_MUL as u64) as *mut u64) = cnt_mul as u64;
             *((kp + keypage::NET as u64) as *mut u8) = net_mode();
+            for (off, v) in display {
+                *((kp + off as u64) as *mut u64) = v;
+            }
+            *((kp + keypage::SPLIT_DIV as u64) as *mut u8) = split_div;
+            *((kp + keypage::ASPECT as u64) as *mut f32) = crate::aspect::stretch() as f32;
         }
         let text_end = align_up(m.text, PAGE);
         let data_start = align_down(m.data.0, PAGE);
@@ -208,6 +215,25 @@ pub fn load(dir: &Path, names: &[&str], hle: &HashMap<&str, u64>) -> Result<Vec<
     }
     debug_breakpoints(&mods)?;
     Ok(mods)
+}
+
+fn display_config() -> [(u32, u64); 5] {
+    let (size, pool, render, root, os) = if crate::services::vi::uhd() {
+        (3840 | 2160 << 32, 0x1600_0000, 0x3000_0000, 0xE050_0000, crate::services::vi::UHD_HEAP)
+    } else {
+        (1920 | 1080 << 32, 0x580_0000, 0x1000_0000, 0xB050_0000, 0xC1C0_0000)
+    };
+    [
+        (keypage::DISPLAY_SIZE, size),
+        (keypage::RENDER_POOL, pool),
+        (keypage::RENDER_HEAP, render),
+        (keypage::ROOT_HEAP, root),
+        (keypage::OS_HEAP, os),
+    ]
+}
+
+fn split_div() -> u8 {
+    if std::env::var("NX_SPLIT60").is_ok_and(|v| v == "1") { u8::MAX } else { 2 }
 }
 
 fn net_mode() -> u8 {

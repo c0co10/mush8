@@ -50,11 +50,27 @@ func gameCodeReady(in folder: URL) -> Bool {
     return made.trimmingCharacters(in: .whitespacesAndNewlines) == nxpatchStamps[tool]?.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+func updateSource(_ s: Settings) -> String {
+    let url = s.folderURL.appendingPathComponent(s.update).resolvingSymlinksInPath()
+    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+    return "\(size)"
+}
+
+func preparedSource(in folder: URL) -> String? {
+    try? String(contentsOf: folder.appendingPathComponent("work/v-upd/source"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func preparedVersion(in folder: URL) -> String? {
+    guard let d = try? Data(contentsOf: folder.appendingPathComponent("work/v-upd/control/control.nacp")), d.count >= 0x3070 else { return nil }
+    let v = String(decoding: d[0x3060..<0x3070].prefix { $0 != 0 }, as: UTF8.self)
+    return v.isEmpty ? nil : v
+}
+
 final class Settings: ObservableObject {
     @Published var folder = ""
     @Published var keys = "prod.keys"
     @Published var base = "base.nsp"
-    @Published var update = "upd4-0-1.nsp"
+    @Published var update = "update.nsp"
     @Published var dlc = "dlc.nsp"
     @Published var network = "off"
     @Published var lanInterface = ""
@@ -62,10 +78,17 @@ final class Settings: ObservableObject {
     @Published var pipelineArchive = false
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var padDriver = "apple"
+    @Published var spatial = true
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var phonePads = true
     @Published var handheld = false
+    @Published var uhd = false
+    @Published var split60 = true
+    @Published var fillScreen = true
+    @Published var hudAtEdges = true
+    @Published var hudScale = 1.0
     private var autosave: AnyCancellable?
 
     init() {
@@ -85,10 +108,17 @@ final class Settings: ObservableObject {
         pipelineArchive = j["pipeline_archive"] as? Bool ?? false
         prewarm = j["prewarm_pipelines"] as? Bool ?? true
         rumble = j["rumble"] as? Bool ?? true
+        padDriver = j["gamepad_driver"] as? String ?? "apple"
+        spatial = j["spatial_audio"] as? Bool ?? true
         backgroundCompile = j["background_compile"] as? Bool ?? true
         motion = j["motion_controls"] as? Bool ?? false
         phonePads = j["phone_pads"] as? Bool ?? true
         handheld = j["handheld"] as? Bool ?? false
+        uhd = j["uhd"] as? Bool ?? false
+        split60 = j["split60"] as? Bool ?? true
+        fillScreen = j["aspect"] as? String != "16:9"
+        hudAtEdges = j["hud"] as? String != "center"
+        hudScale = j["hud_scale"] as? Double ?? 1.0
     }
 
     var folderURL: URL { URL(fileURLWithPath: folder) }
@@ -97,8 +127,9 @@ final class Settings: ObservableObject {
         let j: [String: Any] = [
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
-            "prewarm_pipelines": prewarm, "rumble": rumble, "background_compile": backgroundCompile, "motion_controls": motion,
-            "handheld": handheld, "phone_pads": phonePads,
+            "prewarm_pipelines": prewarm, "rumble": rumble, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
+            "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads,
+            "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
         ]
         try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted, .sortedKeys]) {
@@ -121,10 +152,16 @@ final class Settings: ObservableObject {
         if pipelineArchive { env["NX_PIPELINE_ARCHIVE"] = "1" }
         if prewarm { env["NX_PREWARM"] = "1" }
         if !rumble { env["NX_RUMBLE"] = "0" }
+        env["NX_PAD_DRIVER"] = padDriver
+        if !spatial { env["NX_SPATIAL"] = "0" }
         if !backgroundCompile { env["NX_SYNC_SHADERS"] = "1" }
         env["NX_MOTION"] = motion ? "1" : "0"
         env["NX_PHONE_PADS"] = phonePads ? "1" : "0"
-        if handheld { env["NX_HANDHELD"] = "1" }
+        if handheld { env["NX_HANDHELD"] = "1" } else if uhd { env["NX_4K"] = "1" }
+        if split60 { env["NX_SPLIT60"] = "1" }
+        if fillScreen { env["NX_ASPECT"] = "auto" }
+        if !hudAtEdges { env["NX_HUD"] = "center" }
+        if hudScale != 1 { env["NX_HUD_SCALE"] = String(hudScale) }
         return env
     }
 
@@ -146,12 +183,16 @@ func checks(_ s: Settings) -> [Check] {
     let fm = FileManager.default
     let f = s.folderURL
     let has = { (p: String) in fm.fileExists(atPath: f.appendingPathComponent(p).path) }
+    let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/index.tsv").path
+    let shaders = (try? fm.attributesOfItem(atPath: shaderIndex)[.size] as? Int) ?? nil
     return [
         Check(id: "Base Game", ok: has(s.base), detail: has(s.base) ? s.base : "not found"),
         Check(id: "Update", ok: has(s.update), detail: has(s.update) ? s.update : "not found"),
         Check(id: "Booster Course Pass", ok: has(s.dlc), detail: has(s.dlc) ? s.dlc : "none", optional: true),
-        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f), detail: "work/v-upd/patched"),
-        Check(id: "Precompiled shaders", ok: has("work/shader_cache.noindex/index.tsv"), detail: "work/shader_cache.noindex"),
+        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f) && preparedSource(in: f) == updateSource(s),
+              detail: preparedVersion(in: f).map { "work/v-upd/patched (\($0))" } ?? "work/v-upd/patched"),
+        Check(id: "Precompiled shaders", ok: (shaders ?? 0) > 0,
+              detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex", optional: shaders == 0),
         Check(id: "Console Keys", ok: has(s.keys), detail: has(s.keys) ? s.keys : "not found"),
         Check(id: "Firmware", ok: has("Firmware"), detail: has("Firmware") ? "Firmware/" : "not found"),
     ]
@@ -165,7 +206,11 @@ final class Preparer: ObservableObject {
     func run(_ s: Settings, done: @escaping () -> Void) {
         let f = s.folderURL
         var steps: [(URL, [String])] = []
-        if !FileManager.default.fileExists(atPath: f.appendingPathComponent("work/v-upd/exefs/main").path) {
+        let fm = FileManager.default
+        if preparedSource(in: f) != updateSource(s) || !fm.fileExists(atPath: f.appendingPathComponent("work/v-upd/exefs/main").path) {
+            try? fm.removeItem(at: f.appendingPathComponent("work/v-upd"))
+            try? fm.createDirectory(at: f.appendingPathComponent("work/v-upd"), withIntermediateDirectories: true)
+            try? updateSource(s).write(to: f.appendingPathComponent("work/v-upd/source"), atomically: true, encoding: .utf8)
             steps.append((tool("nxfs", in: f), ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]))
         }
         if !gameCodeReady(in: f) {
@@ -352,45 +397,76 @@ struct LauncherView: View {
         }
     }
 
-    func caption(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
+    func labeled(_ title: String, _ detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+        }
     }
 
     var settingsSection: some View {
         Section("Settings") {
-            Picker("Console mode", selection: $s.handheld) {
-                Text("Docked (1080p)").tag(false)
-                Text("Handheld (720p)").tag(true)
+            Picker("Console mode", selection: Binding(get: { s.handheld ? 2 : s.uhd ? 1 : 0 }, set: { s.handheld = $0 == 2; s.uhd = $0 == 1 })) {
+                Text("Docked (1080p)").tag(0)
+                Text("Docked (4K)").tag(1)
+                Text("Handheld (720p)").tag(2)
             }
-            Picker("Multiplayer", selection: $s.network) {
+            Toggle(isOn: $s.split60) { labeled("60 fps split screen", "3 or 4 players get every screen drawn each frame, needs a fast GPU") }
+            Picker(selection: $s.fillScreen) {
+                Text("16:9").tag(false)
+                Text("Fill screen").tag(true)
+            } label: {
+                labeled("Screen", "Fill screen widens the race to the whole display, menus and HUD keep their proportions")
+            }
+            if s.fillScreen {
+                Picker("HUD", selection: $s.hudAtEdges) {
+                    Text("Screen edges").tag(true)
+                    Text("Centered").tag(false)
+                }
+            }
+            HStack {
+                Text("HUD size")
+                Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
+                Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+            }
+            Picker(selection: $s.network) {
                 Text("Off").tag("off")
                 Text("LAN").tag("lan")
                 Text("Online").tag("lanplay")
                 Text("Wireless (nearby)").tag("wireless")
+            } label: {
+                labeled("Multiplayer", s.network == "wireless" ? "Nearby Mush8 clients can join (keep Wi-Fi on)" : nil)
             }
             switch s.network {
             case "lan":
-                Picker("Network", selection: $s.lanInterface) {
+                Picker(selection: $s.lanInterface) {
                     Text("Automatic").tag("")
                     ForEach(sys.nets, id: \.self) { n in Text("\(n.name) · \(n.ip)").tag(n.name) }
+                } label: {
+                    labeled("Network", "Switch and Mush8 players on the same network can join")
                 }
-                caption("Switch and Mush8 players on the same network can join")
             case "lanplay":
-                TextField("Server (host:port)", text: $s.lanPlayServer)
-                caption("Lan-Play.com clients on the same server can join")
-            case "wireless":
-                caption("Nearby Mush8 clients can join (keep Wi-Fi on)")
+                TextField(text: $s.lanPlayServer, prompt: Text("host:port")) {
+                    labeled("Server", "Lan-Play.com clients on the same server can join")
+                }
             default:
                 EmptyView()
             }
             Toggle("Pipeline archive", isOn: $s.pipelineArchive)
             Toggle("Prewarm pipelines", isOn: $s.prewarm)
-            Toggle("Background shader compiling", isOn: $s.backgroundCompile)
-            caption("Builds the game's graphics pipelines in the background at startup")
+            Toggle(isOn: $s.backgroundCompile) { labeled("Background shader compiling", "Builds the game's graphics pipelines in the background at startup") }
+            Picker(selection: $s.padDriver) {
+                Text("Apple").tag("apple")
+                Text("SDL").tag("sdl")
+            } label: {
+                labeled("Gamepad driver", "SDL supports more controllers, and rumble on more of them. Apple follows the button remapping in System Settings")
+            }
             Toggle("Vibration", isOn: $s.rumble)
             Toggle("Motion controls", isOn: $s.motion)
-            Toggle("iPhone controllers", isOn: $s.phonePads)
-            caption("iPhones on this network join as players with Mush8's \"Use as a controller\"")
+            Toggle(isOn: $s.spatial) {
+                labeled("Spatial audio", "Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
+            }
+            Toggle(isOn: $s.phonePads) { labeled("iPhone controllers", "iPhones on this network join as players with Mush8's \"Use as a controller\"") }
         }
     }
 

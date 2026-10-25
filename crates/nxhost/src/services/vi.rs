@@ -23,8 +23,30 @@ pub fn docked() -> bool {
     *D
 }
 
+pub const UHD_HEAP: u64 = 0xFFE0_0000;
+
+pub fn uhd() -> bool {
+    static U: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        if !docked() || !std::env::var("NX_4K").is_ok_and(|v| v == "1") {
+            return false;
+        }
+        let fits = crate::kernel::aspace().layout.heap_size >= UHD_HEAP && crate::gfx::max_buffer_len() >= UHD_HEAP;
+        if !fits {
+            eprintln!("[vi] 4K needs a {UHD_HEAP:#x}-byte guest heap the GPU can map: staying at 1080p");
+        }
+        fits
+    });
+    *U
+}
+
 pub fn resolution() -> (u32, u32) {
-    if docked() { (1920, 1080) } else { (1280, 720) }
+    if uhd() {
+        (3840, 2160)
+    } else if docked() {
+        (1920, 1080)
+    } else {
+        (1280, 720)
+    }
 }
 
 const DISPLAY_ID: u64 = 0;
@@ -106,7 +128,7 @@ fn vsync_event() -> u32 {
                 let period = std::time::Duration::from_nanos(16_666_667);
                 let mut next = std::time::Instant::now();
                 loop {
-                    next += period;
+                    next += if crate::gfx::turbo() { period / 8 } else { period };
                     let now = std::time::Instant::now();
                     if next > now {
                         std::thread::sleep(next - now);

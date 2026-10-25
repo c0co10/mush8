@@ -1,0 +1,16 @@
+/build/
+/target/
+/work/
+/Firmware/
+/ios/Mush8.xcodeproj/
+*.nsp
+*.xci
+*.nca
+*.keys
+.DS_Store
+.localized
+__MACOSX/
+.AppleDouble
+.LSOverride
+Icon[
+]

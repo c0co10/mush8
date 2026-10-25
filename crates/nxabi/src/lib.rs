@@ -6,6 +6,13 @@ pub mod keypage {
     pub const SVC_GATE: u32 = 0x08;
     pub const CNT_MUL: u32 = 0x10;
     pub const NET: u32 = 0x18;
+    pub const DISPLAY_SIZE: u32 = 0x20;
+    pub const RENDER_POOL: u32 = 0x28;
+    pub const RENDER_HEAP: u32 = 0x30;
+    pub const ROOT_HEAP: u32 = 0x38;
+    pub const OS_HEAP: u32 = 0x40;
+    pub const SPLIT_DIV: u32 = 0x48;
+    pub const ASPECT: u32 = 0x50;
 }
 
 pub mod ctx {

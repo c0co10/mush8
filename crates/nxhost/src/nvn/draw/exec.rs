@@ -314,6 +314,7 @@ impl Replay<'_> {
     }
 
     fn primitives(&mut self, d: &super::Draw) -> Result<Prim, &'static str> {
+        d.validate_indices()?;
         let (ty, convert): (MTLPrimitiveType, Option<fn(&[u32]) -> Vec<u32>>) = match d.mode {
             0 => (MTLPrimitiveType::Point, None),
             1 => (MTLPrimitiveType::Line, None),
@@ -363,6 +364,13 @@ impl Replay<'_> {
                     let h = heap.unwrap();
                     let itype = if t == 1 { MTLIndexType::UInt16 } else { MTLIndexType::UInt32 };
                     return Ok(Prim::Indexed { ty, itype, buffer: h.buffer.clone(), offset: (addr - h.base) as usize, count: d.count as usize, base_vertex: d.base_vertex });
+                }
+                if !crate::kernel::aspace().readable(addr, size * d.count as u64) {
+                    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        eprintln!("[gfx] draw skipped: its {} indices at {addr:#x} are outside guest memory", d.count);
+                    }
+                    return Err("index buffer outside guest memory");
                 }
                 let src = read_indices(t, addr, d.count);
                 let v = match conv {

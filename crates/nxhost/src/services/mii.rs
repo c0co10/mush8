@@ -7,6 +7,7 @@ const CHAR_INFO_SIZE: usize = 0x58;
 const DEFAULT_COUNT: usize = 6;
 const SOURCE_DATABASE: u32 = 1;
 const SOURCE_DEFAULT: u32 = 2;
+const NOT_FOUND: u32 = 126 | 1 << 9;
 
 pub static VERIFY: OnceLock<u64> = OnceLock::new();
 
@@ -129,7 +130,7 @@ impl Service for Database {
                 rsp.data.extend_from_slice(&defaults()[i]);
             }
             5 => rsp.data.extend_from_slice(&req.data[..CHAR_INFO_SIZE.min(req.data.len())]),
-            21 => rsp.push_u32(u32::MAX),
+            21 => return NOT_FOUND,
             22 => {}
             _ => return Stub(self.name()).call(req, rsp),
         }

@@ -1,8 +1,10 @@
 // Mush8 - main.rs
 // Constantin Clerc (c22dev) - 0.1
+mod aspect;
 mod audio;
 mod diag;
 mod dnssd;
+mod game;
 mod gfx;
 mod guest;
 mod haptics;
@@ -12,9 +14,12 @@ mod ipc;
 mod kernel;
 mod loader;
 mod mem;
+mod motion;
 mod movie;
 mod remote;
 mod services;
+#[cfg(target_os = "macos")]
+mod sdl;
 mod shm;
 mod stubs;
 mod nvn;
@@ -46,6 +51,13 @@ fn read_npdm(path: &PathBuf) -> Result<Npdm> {
     let b = std::fs::read(path).with_context(|| path.display().to_string())?;
     anyhow::ensure!(b.len() >= 0x20 && &b[..4] == b"META", "not an NPDM");
     Ok(Npdm { priority: b[0xE], core: b[0xF], stack_size: u32::from_le_bytes(b[0x1C..0x20].try_into()?) })
+}
+
+fn update_file(p: &std::path::Path) -> PathBuf {
+    if !p.exists() && p == std::path::Path::new("update.nsp") && std::path::Path::new("upd4-0-1.nsp").exists() {
+        return PathBuf::from("upd4-0-1.nsp");
+    }
+    p.to_path_buf()
 }
 
 fn program(n: &nxfs::Nsp) -> Result<&nxfs::nca::Nca> {
@@ -90,7 +102,7 @@ struct Args {
     keys: PathBuf,
     #[arg(long, default_value = "base.nsp")]
     base: PathBuf,
-    #[arg(long, default_value = "upd4-0-1.nsp")]
+    #[arg(long, default_value = "update.nsp")]
     update: PathBuf,
     #[arg(long, default_value = "work/save")]
     save: PathBuf,
@@ -111,7 +123,7 @@ struct Args {
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     start(Args::parse())?;
-    gfx::run_app("Mush8", 1280.0, 720.0)
+    gfx::run_app("Mush8", 720.0 * aspect::ratio(), 720.0)
 }
 
 #[cfg(target_os = "ios")]
@@ -142,10 +154,10 @@ fn main() {
     let args = Args::parse_from(["nxhost", "--patched", &bundle.join("modules").display().to_string(), "--npdm", &bundle.join("modules/main.npdm").display().to_string()]);
     gfx::run_app(move || {
         apply_launcher_settings();
-        let missing: Vec<&str> = ["prod.keys", "base.nsp", "upd4-0-1.nsp"].into_iter().filter(|f| !std::path::Path::new(f).exists()).collect();
+        let missing: Vec<&str> = ["prod.keys", "base.nsp", "update.nsp"].into_iter().filter(|f| !update_file(std::path::Path::new(f)).exists()).collect();
         anyhow::ensure!(
             missing.is_empty(),
-            "Missing {}.\n\nCopy prod.keys, base.nsp, upd4-0-1.nsp (and optionally dlc.nsp and the Firmware folder) into this app's folder: Finder → your iPhone or iPad → Files → Mush8, or the Files app → On My iPhone → Mush8.",
+            "Missing {}.\n\nCopy prod.keys, base.nsp, the update .nsp (and optionally dlc.nsp and the Firmware folder) into this app's folder: Finder → your iPhone or iPad → Files → Mush8, or the Files app → On My iPhone → Mush8.",
             missing.join(", ")
         );
         start(args)
@@ -194,6 +206,12 @@ fn apply_launcher_settings() {
     if field("rumble").as_deref() == Some("false") {
         unsafe { std::env::set_var("NX_RUMBLE", "0") };
     }
+    if field("gamepad_driver").as_deref() == Some("sdl") {
+        unsafe { std::env::set_var("NX_PAD_DRIVER", "sdl") };
+    }
+    if field("spatial_audio").as_deref() == Some("false") {
+        unsafe { std::env::set_var("NX_SPATIAL", "0") };
+    }
     if field("motion_controls").as_deref() == Some("true") {
         unsafe { std::env::set_var("NX_MOTION", "1") };
     }
@@ -203,6 +221,15 @@ fn apply_launcher_settings() {
     if field("phone_pads").as_deref() == Some("true") {
         unsafe { std::env::set_var("NX_PHONE_PADS", "1") };
     }
+    if field("aspect").as_deref() != Some("16:9") {
+        unsafe { std::env::set_var("NX_ASPECT", "auto") };
+    }
+    if field("hud").as_deref() == Some("center") {
+        unsafe { std::env::set_var("NX_HUD", "center") };
+    }
+    if let Some(scale) = field("hud_scale") {
+        unsafe { std::env::set_var("NX_HUD_SCALE", scale) };
+    }
 }
 
 fn start(args: Args) -> Result<()> {
@@ -211,7 +238,8 @@ fn start(args: Args) -> Result<()> {
 
     let keys = nxfs::keys::Keys::load(&args.keys)?;
     let base = nxfs::Nsp::open(&args.base, &keys)?;
-    let update = nxfs::Nsp::open(&args.update, &keys)?;
+    let update = nxfs::Nsp::open(&update_file(&args.update), &keys)?;
+    let version = game::identify(&update, &dir)?;
     let romfs = program(&update)?.patched_romfs(program(&base)?)?;
     eprintln!("[host] RomFS: {:.2} GB", nxfs::storage::Storage::size(&*romfs) as f64 / 1e9);
     if args.movies {
@@ -223,9 +251,10 @@ fn start(args: Args) -> Result<()> {
         nvn::precompile(romfs, &modules)?;
         std::process::exit(0);
     }
+    let romfs = aspect::romfs(romfs)?;
     let _ = services::fs::CONFIG.set(services::fs::Config {
         romfs,
-        save_dir: args.save.clone(),
+        save_dir: if args.save == std::path::Path::new("work/save") && version != "4.0.1" { PathBuf::from(format!("work/save-{version}")) } else { args.save.clone() },
         sd_dir: args.sdmc.clone(),
         system_dir: args.system.clone(),
         firmware_dir: args.firmware.clone(),

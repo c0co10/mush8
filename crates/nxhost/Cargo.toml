@@ -31,10 +31,13 @@ png = "0.18.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = "0.3.2"
+objc2-core-audio = "0.3.2"
+sdl3-sys = { version = "0.7.2", features = ["build-from-source-static"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-ui-kit = "0.3.2"
 objc2-core-motion = "0.3.2"
+objc2-avf-audio = "0.3.2"
 
 [build-dependencies]
 nxfs = { version = "0.1.0", path = "../nxfs" }

@@ -32,10 +32,14 @@ final class Settings: ObservableObject {
     @Published var lanPlayServer = ""
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var spatial = true
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var handheld = true
     @Published var phonePads = false
+    @Published var fillScreen = true
+    @Published var hudAtEdges = true
+    @Published var hudScale = 1.0
     var extra: [String: Any] = [:]
     private var autosave: AnyCancellable?
 
@@ -50,10 +54,14 @@ final class Settings: ObservableObject {
         lanPlayServer = json["lanplay_server"] as? String ?? ""
         prewarm = json["prewarm_pipelines"] as? Bool ?? true
         rumble = json["rumble"] as? Bool ?? true
+        spatial = json["spatial_audio"] as? Bool ?? true
         backgroundCompile = json["background_compile"] as? Bool ?? true
         motion = json["motion_controls"] as? Bool ?? false
         handheld = json["handheld"] as? Bool ?? true
         phonePads = json["phone_pads"] as? Bool ?? false
+        fillScreen = json["aspect"] as? String != "16:9"
+        hudAtEdges = json["hud"] as? String != "center"
+        hudScale = json["hud_scale"] as? Double ?? 1.0
     }
 
     func save() throws {
@@ -64,11 +72,15 @@ final class Settings: ObservableObject {
         json["extra_pads"] = nil
         json["prewarm_pipelines"] = prewarm
         json["rumble"] = rumble
+        json["spatial_audio"] = spatial
         json["background_compile"] = backgroundCompile
         json["motion"] = nil
         json["motion_controls"] = motion
         json["handheld"] = handheld
         json["phone_pads"] = phonePads
+        json["aspect"] = fillScreen ? "fill" : "16:9"
+        json["hud"] = hudAtEdges ? "edges" : "center"
+        json["hud_scale"] = hudScale
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: configURL)
     }
@@ -136,7 +148,7 @@ func broadcastAvailable() -> Bool {
 
 let gameFiles = [
     GameFile(id: "Base Game", name: "base.nsp"),
-    GameFile(id: "Update", name: "upd4-0-1.nsp"),
+    GameFile(id: "Update", name: "update.nsp"),
     GameFile(id: "Booster Course Pass", name: "dlc.nsp", optional: true),
     GameFile(id: "Console Keys", name: "prod.keys"),
     GameFile(id: "Firmware", name: "Firmware"),
@@ -190,12 +202,12 @@ final class Files: ObservableObject {
         if n.hasSuffix(".nsp") {
             switch nspKind(url) {
             case "base": return "base.nsp"
-            case "update": return "upd4-0-1.nsp"
+            case "update": return "update.nsp"
             case "dlc": return "dlc.nsp"
             case "other": return url.lastPathComponent
             default: break
             }
-            if n.contains("upd") || n.contains("update") || n.contains("v4") { return "upd4-0-1.nsp" }
+            if n.contains("upd") || n.contains("update") { return "update.nsp" }
             if n.contains("dlc") || n.contains("booster") || n.contains("aoc") { return "dlc.nsp" }
             if n.contains("base") || n.contains("mario") { return "base.nsp" }
         }
@@ -267,6 +279,11 @@ struct LauncherView: View {
                     Toggle("Motion controls", isOn: $s.motion)
                 }
                 Section {
+                    Toggle("Spatial audio", isOn: $s.spatial)
+                } footer: {
+                    Text("Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
+                }
+                Section {
                     Toggle("iPhone controllers", isOn: $s.phonePads)
                 } footer: {
                     Text("Nearby iPhones can join as players with \"Use as a controller\"")
@@ -278,6 +295,25 @@ struct LauncherView: View {
                     }
                 } footer: {
                     Text("Handheld renders at 720p: lighter on the GPU and battery")
+                }
+                Section {
+                    Picker("Screen", selection: $s.fillScreen) {
+                        Text("16:9").tag(false)
+                        Text("Fill screen").tag(true)
+                    }
+                    if s.fillScreen {
+                        Picker("HUD", selection: $s.hudAtEdges) {
+                            Text("Screen edges").tag(true)
+                            Text("Centered").tag(false)
+                        }
+                    }
+                    HStack {
+                        Text("HUD size")
+                        Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
+                        Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Fill screen widens the race to the whole display, menus and HUD keep their proportions")
                 }
                 Section {
                     Toggle("Prewarm pipelines", isOn: $s.prewarm)

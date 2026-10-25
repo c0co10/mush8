@@ -50,6 +50,21 @@ struct Engine {
     sampled: HashMap<textures::TexKey, Shared<gfx::Texture>>,
     touched: Vec<(textures::TexKey, Shared<gfx::Texture>)>,
     clears: Vec<PendingClear>,
+    draws: u32,
+    skipped: u32,
+    held: Held,
+}
+
+#[derive(Default)]
+struct Held {
+    last: bool,
+}
+
+impl Held {
+    fn present(&mut self, skipped: u32, draws: u32) -> bool {
+        self.last = !self.last && skipped * 50 >= draws.max(1);
+        !self.last
+    }
 }
 
 struct PendingClear {
@@ -111,6 +126,7 @@ struct Replay<'a> {
     cb: Retained<gfx::CommandBuffer>,
     pass: Option<Pass>,
     heap: Option<&'static gfx::HeapBuffer>,
+    passes: u32,
 }
 
 impl Replay<'_> {
@@ -270,7 +286,10 @@ impl Replay<'_> {
                     let _ = r;
                 }
                 Cmd::Draw(d) => {
-                    let _ = self.draw(d);
+                    self.e.draws += 1;
+                    if self.draw(d).is_err_and(|e| e.ends_with("compiling")) {
+                        self.e.skipped += 1;
+                    }
                 }
             }
         }
@@ -324,6 +343,12 @@ impl Replay<'_> {
                     for dst in self.e.textures.aliases_of(k) {
                         textures::copy_blocks(&self.cb, &src.0, &dst.0, Some(*sub));
                     }
+                }
+            }
+            self.passes += 1;
+            if self.passes % PASSES_PER_COMMIT == 0 {
+                if let Some(next) = gfx::gpu().queue.0.commandBuffer() {
+                    commit(&std::mem::replace::<Retained<gfx::CommandBuffer>>(&mut self.cb, next));
                 }
             }
         }
@@ -502,7 +527,7 @@ pub fn submit(handles: &[u64]) {
         e.bank_ok = [false; 3];
         e.textures.frame += 1;
         let Some(cb) = gfx::gpu().queue.0.commandBuffer() else { return };
-        let mut r = Replay { e: &mut e, cb, pass: None, heap: None };
+        let mut r = Replay { e: &mut e, cb, pass: None, heap: None, passes: 0 };
         let mut updated = BTreeMap::new();
         for h in handles {
             if let Some(cmds) = cmd::recording(*h) {
@@ -545,7 +570,7 @@ pub fn submit(handles: &[u64]) {
             unsafe { std::ptr::copy_nonoverlapping(ptr as *const u8, addr as *mut u8, size as usize) };
         }
         let cb = r.cb;
-        cb.commit();
+        commit(&cb);
         static DUMPED_AT: AtomicBool = AtomicBool::new(false);
         let dump_at = dbg.dump_rt_at.is_some_and(|t| T0.elapsed().as_secs_f32() >= t) && !DUMPED_AT.swap(true, Relaxed);
         if DUMP_NEXT.swap(false, Relaxed) || dump_at || dbg.dump_frames.contains(&n) {
@@ -606,10 +631,29 @@ pub fn sync_wait(sync: u64) -> u64 {
     }
 }
 
+const PASSES_PER_COMMIT: u32 = 24;
+
+fn commit(cb: &gfx::CommandBuffer) {
+    if *FPS {
+        let h = block2::RcBlock::new(|cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { cb.as_ref() };
+            static LAST_END: Mutex<f64> = Mutex::new(0.0);
+            let (start, end) = (cb.GPUStartTime(), cb.GPUEndTime());
+            let mut last = LAST_END.lock().unwrap();
+            GPU_NS.fetch_add(((end - start.max(*last)).max(0.0) * 1e9) as u64, Relaxed);
+            *last = last.max(end);
+        });
+        unsafe { cb.addCompletedHandler(block2::RcBlock::as_ptr(&h)) };
+    }
+    cb.commit();
+}
+
+static FPS: LazyLock<bool> = LazyLock::new(|| std::env::var_os("NX_FPS").is_some());
+static GPU_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn count_fps() {
-    static ON: LazyLock<bool> = LazyLock::new(|| std::env::var_os("NX_FPS").is_some());
     static STATS: Mutex<Option<(std::time::Instant, std::time::Instant, u32, f32)>> = Mutex::new(None);
-    if !*ON {
+    if !*FPS {
         return;
     }
     let now = std::time::Instant::now();
@@ -619,7 +663,8 @@ fn count_fps() {
     *last = now;
     *n += 1;
     if now.duration_since(*start).as_secs() >= 1 {
-        eprintln!("[fps] {:.1} fps, worst frame {worst:.1} ms", *n as f32 / now.duration_since(*start).as_secs_f32());
+        let gpu = GPU_NS.swap(0, Relaxed) as f32 / 1e6 / *n as f32;
+        eprintln!("[fps] {:.1} fps, worst frame {worst:.1} ms, GPU {gpu:.1} ms/frame", *n as f32 / now.duration_since(*start).as_secs_f32());
         *s = Some((now, now, 0, 0.0));
     }
 }
@@ -629,14 +674,17 @@ pub fn present(texture: u64) {
     objc2::rc::autoreleasepool(|_| {
         let b = super::objects::texture(texture).map(|t| t.builder);
         let Some(b) = b else { return };
-        let t = {
+        let (t, show) = {
             let mut e = ENGINE.lock().unwrap();
             e.forget_dead();
-            e.textures.get(&b, true)
+            let (skipped, draws) = (std::mem::take(&mut e.skipped), std::mem::take(&mut e.draws));
+            (e.textures.get(&b, true), e.held.present(skipped, draws))
         };
         if let Some((_, t)) = t {
-            dump_at(&t);
-            crate::kernel::blocking(|| gfx::present(&t.0, !UPPER_LEFT.load(Relaxed)));
+            if show {
+                dump_at(&t);
+            }
+            crate::kernel::blocking(|| gfx::present(show.then_some(&*t.0), !UPPER_LEFT.load(Relaxed)));
         }
     });
 }
@@ -755,8 +803,7 @@ fn dump_at(t: &Shared<gfx::Texture>) {
         v.sort_by(|a, b| b.partial_cmp(a).unwrap());
         Mutex::new(v)
     });
-    static START: LazyLock<std::time::Instant> = LazyLock::new(std::time::Instant::now);
-    let now = START.elapsed().as_secs_f32();
+    let now = gfx::clock();
     let mut times = TIMES.lock().unwrap();
     if times.last().is_some_and(|&at| now >= at) {
         let at = times.pop().unwrap();
@@ -782,5 +829,28 @@ fn collect_updates(cmds: &[Cmd], depth: usize, out: &mut BTreeMap<u64, u64>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Held;
+
+    #[test]
+    fn only_frames_missing_many_draws_are_held_back() {
+        let mut h = Held::default();
+        assert!(h.present(0, 3200));
+        assert!(!h.present(700, 3200), "the race behind the loading screen, missing a fifth of its draws, is held back");
+        assert!(h.present(30, 2500), "a frame missing about 1% of its draws is shown");
+        assert!(h.present(13, 1200), "a race frame missing about 1% of its draws is shown");
+        assert!(!h.present(4, 143), "a menu fade missing 4 of 143 draws turns grey and is held back");
+    }
+
+    #[test]
+    fn never_two_frames_in_a_row_are_held_back() {
+        let mut h = Held::default();
+        assert!(!h.present(700, 3200));
+        assert!(h.present(700, 3200), "the second frame in a row is shown, so a hold costs at most one repeated frame");
+        assert!(!h.present(700, 3200));
     }
 }

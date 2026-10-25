@@ -35,19 +35,27 @@ CACHE=work/shader_cache_ios.noindex
 RES=target/ios-res
 
 cargo build --release
-[ -f work/v-upd/exefs/main ] || ./target/release/nxfs extract --base base.nsp --update upd4-0-1.nsp --out work/v-upd
+UPDATE=update.nsp
+[ -e "$UPDATE" ] || [ ! -e upd4-0-1.nsp ] || UPDATE=upd4-0-1.nsp
+SOURCE="$(stat -L -f %z "$UPDATE" 2>/dev/null)"
+if [ "$(cat work/v-upd/source 2>/dev/null)" != "$SOURCE" ] || [ ! -f work/v-upd/exefs/main ]; then
+  rm -rf work/v-upd
+  mkdir -p work/v-upd
+  echo "$SOURCE" > work/v-upd/source
+  ./target/release/nxfs extract --base base.nsp --update "$UPDATE" --out work/v-upd
+fi
 [ "$(cat "$PATCHED/nxpatch.stamp" 2>/dev/null)" = "$(./target/release/nxpatch stamp)" ] || ./target/release/nxpatch rewrite --out "$PATCHED" \
   work/v-upd/exefs/main work/v-upd/exefs/subsdk0 work/v-upd/exefs/sdk
 
 mkdir -p "$CACHE"
 LIST="$CACHE/pipelines.all.tsv"
 cat data/pipelines.tsv work/pipelines.tsv 2>/dev/null | awk 'NF && !seen[$0]++' > "$LIST.new"
-STAMP="$(shasum "$LIST.new" | cut -d' ' -f1)"
+STAMP="$({ cat "$LIST.new"; echo "$SOURCE"; } | shasum | cut -d' ' -f1)"
 mv "$LIST.new" "$LIST"
 
 if [ "$SHADERS" = 1 ] || [ ! -f "$CACHE/index.tsv" ] || [ "$(cat "$CACHE/pipelines.stamp" 2>/dev/null)" != "$STAMP" ]; then
   echo "precompiling shaders for iOS (log: work/precompile_ios.log)…"
-  NX_SHADER_SDK=iphoneos NX_SHADER_CACHE="$CACHE" ./target/release/nxhost --precompile > work/precompile_ios.log 2>&1 \
+  NX_SHADER_SDK=iphoneos NX_SHADER_CACHE="$CACHE" ./target/release/nxhost --update "$UPDATE" --precompile > work/precompile_ios.log 2>&1 \
     || { tail -20 work/precompile_ios.log; exit 1; }
   tail -3 work/precompile_ios.log
   echo "$STAMP" > "$CACHE/pipelines.stamp"
@@ -97,5 +105,5 @@ if [ "$MODE" = "--install" ]; then
   fi
   [ -n "$DEVICE" ] || { echo "no iPhone / iPad connected (unlocked, Developer Mode on)"; exit 1; }
   xcrun devicectl device install app --device "$DEVICE" "$APP"
-  echo "installed on $DEVICE: copy prod.keys, base.nsp, upd4-0-1.nsp (dlc.nsp, Firmware/) into the app's Files folder"
+  echo "installed on $DEVICE: copy prod.keys, base.nsp, the update .nsp (dlc.nsp, Firmware/) into the app's Files folder"
 fi
