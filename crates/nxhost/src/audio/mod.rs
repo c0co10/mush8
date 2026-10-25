@@ -3,6 +3,8 @@
 mod dsp;
 mod effects;
 pub mod output;
+mod route;
+mod system;
 
 use dsp::Biquad;
 
@@ -251,10 +253,10 @@ struct Sink {
     used: bool,
     device: bool,
     inputs: Vec<u8>,
-    downmix: Option<[f32; 4]>,
 }
 
-const DOWNMIX_DEFAULT: [f32; 4] = [1.0, 0.707, 0.251, 0.707];
+const SINK_CENTER: usize = 2;
+const SINK_SCALE: f32 = 1.0 / 32768.0;
 
 pub struct Renderer {
     cfg: Config,
@@ -438,7 +440,6 @@ impl Renderer {
             s.device = p[0] == 1;
             let n = (u32_at(d, 0x100) as usize).min(VOICE_CHANNELS_MAX);
             s.inputs = d[0x104..0x104 + n].to_vec();
-            s.downmix = (d[0x10B] != 0).then(|| [f32_at(d, 0x10C), f32_at(d, 0x110), f32_at(d, 0x114), f32_at(d, 0x118)]);
         }
         o.resize(o.len() + self.sinks.len() * OUT_SINK, 0);
         put(&mut o, 7, self.sinks.len() * OUT_SINK);
@@ -591,7 +592,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, out: &mut [i16]) {
+    pub fn render(&mut self, out: &mut [f32]) {
         self.buffers.fill(0.0);
         for i in 0..self.voices.len() {
             if !self.voices[i].skip() && self.prepare_voice(i) {
@@ -858,28 +859,24 @@ impl Renderer {
         }
     }
 
-    fn render_sink(&mut self, out: &mut [i16]) {
-        out.fill(0);
+    fn render_sink(&mut self, out: &mut [f32]) {
+        out.fill(0.0);
         let total = self.cfg.mix_buffer_count as usize;
         let base = self.mixes[0].buffer_offset;
         let Some(sink) = self.sinks.iter().find(|s| s.used && s.device && !s.inputs.is_empty()) else { return };
         let idx: Vec<usize> = sink.inputs.iter().map(|&k| base + k as usize).filter(|&b| b < total).collect();
         let n = self.cfg.sample_count as usize;
-        let ch = |b: usize| &self.buffers[b * n..(b + 1) * n];
-        let coefs = sink.downmix.or((idx.len() == 6).then_some(DOWNMIX_DEFAULT));
-        for j in 0..n {
-            let (l, r) = match (idx.len(), coefs) {
-                (6, Some(c)) => {
-                    let (fl, fr, fc, lfe, bl, br) = (ch(idx[0])[j], ch(idx[1])[j], ch(idx[2])[j], ch(idx[3])[j], ch(idx[4])[j], ch(idx[5])[j]);
-                    let common = c[1] * fc + c[2] * lfe;
-                    (c[0] * fl + common + c[3] * bl, c[0] * fr + common + c[3] * br)
-                }
-                (1, _) => (ch(idx[0])[j], ch(idx[0])[j]),
-                (0, _) => (0.0, 0.0),
-                _ => (ch(idx[0])[j], ch(idx[1])[j]),
-            };
-            out[2 * j] = l.clamp(-32768.0, 32767.0) as i16;
-            out[2 * j + 1] = r.clamp(-32768.0, 32767.0) as i16;
+        let routing: &[(usize, usize)] = match idx.len() {
+            0 => &[],
+            1 => &[(SINK_CENTER, 0)],
+            2..6 => &[(0, 0), (1, 1)],
+            _ => &[(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)],
+        };
+        for &(dst, src) in routing {
+            let b = idx[src];
+            for (o, s) in out[dst * n..(dst + 1) * n].iter_mut().zip(&self.buffers[b * n..(b + 1) * n]) {
+                *o = (s * SINK_SCALE).clamp(-1.0, 1.0);
+            }
         }
     }
 }

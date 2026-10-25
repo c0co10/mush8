@@ -271,8 +271,6 @@ fn compile_inner(blob: &[u8], compute: bool, extra_outputs: u32, uint_targets: u
 }
 
 pub(super) fn aot_dir() -> &'static str {
-    // The key excludes the shared prelude. Invalidate AOT libraries when its
-    // heap mapping ABI or implementation changes (v2 adds division-free paths).
     static DIR: LazyLock<String> = LazyLock::new(|| format!("{}/heap-segments-v2",std::env::var("NX_SHADER_CACHE").unwrap_or_else(|_| "work/shader_cache.noindex".into())));
     &DIR
 }
@@ -535,8 +533,17 @@ pub fn precompile(romfs: nxfs::storage::DynStorage, modules: &[std::path::PathBu
             });
         }
     });
-    std::fs::write(format!("{}/index.tsv", aot_dir()), index.into_inner().unwrap())?;
-    eprintln!("[shader] precompiled {} shaders in {:.0} s", sources.len(), t0.elapsed().as_secs_f32());
+    let index = index.into_inner().unwrap();
+    if index.is_empty() && !sources.is_empty() {
+        eprintln!(
+            "[shader] warning: no shader was precompiled, so the game compiles them while it plays (black or missing \
+             graphics for a moment in new scenes). Install the Metal Toolchain with `xcodebuild -downloadComponent \
+             MetalToolchain`, then Prepare again"
+        );
+    } else {
+        eprintln!("[shader] precompiled {} shaders in {:.0} s", sources.len(), t0.elapsed().as_secs_f32());
+    }
+    std::fs::write(format!("{}/index.tsv", aot_dir()), index)?;
     if sdk == "iphoneos" || std::env::var_os("NX_PIPELINE_ARCHIVE").is_none() {
         return Ok(());
     }

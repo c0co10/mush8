@@ -18,7 +18,7 @@ mod nfp;
 pub mod nifm;
 mod pl;
 mod time;
-mod vi;
+pub mod vi;
 mod wireless;
 pub mod vnet;
 

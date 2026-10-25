@@ -271,8 +271,6 @@ pub fn copy_to_buffer(cb: &gfx::CommandBuffer, src: &Texture, (layer, level): (u
     if let Some((chunk,off)) = heap.buffer_range(dst,len) {
         return copy_into(cb, src, (layer, level), r, nvn_format, &chunk.buffer.0, off);
     }
-    // A texture readback may straddle chunk boundaries. Preserve ordering in
-    // this command buffer and distribute the temporary output to each chunk.
     let temp = gfx::gpu().device.0.newBufferWithLength_options(len as usize,MTLResourceOptions::StorageModeShared).ok_or("texture readback staging buffer")?;
     copy_into(cb,src,(layer,level),r,nvn_format,&temp,0)?;
     let enc = cb.blitCommandEncoder().ok_or("no readback split encoder")?;

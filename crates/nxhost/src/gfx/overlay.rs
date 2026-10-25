@@ -225,7 +225,7 @@ const CANCEL: u64 = 1 << 1;
 
 pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
     let connected = || crate::input::SLOT_NAMES.lock().unwrap().iter().filter(|n| n.is_some()).count();
-    if !ui::available() {
+    if !ui::available() || std::env::var_os("NX_AUTOINPUT").is_some() {
         return Some(connected());
     }
     let max = max.clamp(1, crate::input::MAX_PLAYERS);
@@ -243,10 +243,12 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
                 None => format!("Player {}  ·  connect a controller", i + 1),
             })
             .collect();
-        let footer = if n < min {
-            format!("{n} of {min} players connected · A or + to continue anyway · B to go back")
-        } else {
-            "A or + to continue · B to go back".to_string()
+        let keyboard = names[0].as_deref() == Some("Keyboard");
+        let footer = match (n < min, keyboard) {
+            (true, false) => format!("{n} of {min} players connected · A or + to continue anyway · B to go back"),
+            (true, true) => format!("{n} of {min} players · Return to continue anyway · Backspace to go back"),
+            (false, false) => "A or + to continue · B to go back".to_string(),
+            (false, true) => "Return to continue · Backspace to go back".to_string(),
         };
         on_main(move |_| ui::update(rows, footer));
         if let Some(path) = std::env::var("NX_OVERLAY_PNG").ok().filter(|_| !std::mem::replace(&mut saved, true)) {

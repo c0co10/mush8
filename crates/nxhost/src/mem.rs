@@ -109,6 +109,11 @@ impl AddressSpace {
         self.base + self.layout.stack_off()
     }
 
+    pub fn readable(&self, addr: u64, len: u64) -> bool {
+        let (start, size, b) = self.map.lock().unwrap().query(addr);
+        b.perm & perm::R != 0 && addr.checked_add(len).is_some_and(|end| end <= start + size)
+    }
+
     pub fn set(&self, addr: u64, size: u64, b: Block) -> Result<()> {
         let (lo, hi) = (addr & !(PAGE - 1), (addr + size).next_multiple_of(PAGE));
         let (inner_lo, inner_hi) = (addr.next_multiple_of(PAGE), (addr + size) & !(PAGE - 1));

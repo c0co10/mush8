@@ -20,6 +20,21 @@ pub struct Draw {
     pub instances: u32,
 }
 
+impl Draw {
+    pub(super) fn validate_indices(&self) -> Result<(), &'static str> {
+        let Some((ty, addr)) = self.index else { return Ok(()) };
+        if self.count == 0 || self.instances == 0 {
+            return Ok(());
+        }
+        if addr == 0 {
+            return Err("null index buffer");
+        }
+        let size = match ty { 0 => 1, 1 => 2, _ => 4 };
+        addr.checked_add(size * self.count as u64).ok_or("index buffer range overflows")?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Cmd {
     SetRenderTargets { colors: Vec<Option<Box<TexBuilder>>>, depth: Option<Box<TexBuilder>> },
@@ -381,6 +396,11 @@ fn state_cmd(a: &Args, f: impl Fn(u64) -> Cmd) -> u64 {
 }
 
 fn draw(a: &Args, d: Draw) -> u64 {
+    if let Err(reason) = d.validate_indices() {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| eprintln!("[nvn] skipping draw in command buffer {:#x}: {reason}; {d:?}", a.0[0]));
+        return 0;
+    }
     push(a.0[0], Cmd::Draw(d));
     0
 }
@@ -406,4 +426,51 @@ pub fn present(a: &Args) -> u64 {
         draw::present(t);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    fn record_draw(name: &str, mut args: [u64; 8]) -> std::sync::Arc<Vec<Cmd>> {
+        static NEXT_CB: AtomicU64 = AtomicU64::new(0x1000);
+        let cb = NEXT_CB.fetch_add(1, Relaxed);
+        args[0] = cb;
+        begin(cb);
+        host_impl(name).unwrap()(&Args(args, [0; 8]));
+        recording(end(cb)).unwrap()
+    }
+
+    #[test]
+    fn indexed_draws_with_null_buffers_are_not_recorded() {
+        for name in ["nvnCommandBufferDrawElements", "nvnCommandBufferDrawElementsBaseVertex", "nvnCommandBufferDrawElementsInstanced"] {
+            let commands = record_draw(name, [0, 4, 1, 36, 0, 0, 0, 1]);
+            assert!(commands.is_empty(), "{name} recorded a draw that would dereference null");
+        }
+    }
+
+    #[test]
+    fn overflowing_index_ranges_are_not_recorded() {
+        let commands = record_draw("nvnCommandBufferDrawElements", [0, 4, 1, 2, u64::MAX - 1, 0, 0, 1]);
+        assert!(commands.is_empty(), "index range overflow reached the renderer");
+    }
+
+    #[test]
+    fn valid_indexed_draw_preserves_arguments() {
+        let indices = [0u16, 1, 2];
+        let addr = indices.as_ptr() as u64;
+        let commands = record_draw("nvnCommandBufferDrawElementsInstanced", [0, 4, 1, 3, addr, 7, 2, 4]);
+        let [Cmd::Draw(d)] = commands.as_slice() else { panic!("expected one indexed draw") };
+        assert_eq!(d.index, Some((1, addr)));
+        assert_eq!((d.mode, d.count, d.base_vertex, d.base_instance, d.instances), (4, 3, 7, 2, 4));
+    }
+
+    #[test]
+    fn non_indexed_draw_does_not_require_an_index_buffer() {
+        let commands = record_draw("nvnCommandBufferDrawArrays", [0, 4, 2, 36, 0, 0, 0, 0]);
+        let [Cmd::Draw(d)] = commands.as_slice() else { panic!("expected one non-indexed draw") };
+        assert_eq!(d.index, None);
+        assert_eq!((d.first, d.count), (2, 36));
+    }
 }

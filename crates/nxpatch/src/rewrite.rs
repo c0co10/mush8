@@ -31,7 +31,18 @@ pub struct GamePatch {
 }
 
 const MK8DX_401: &str = "158c0c7399aabd7bf83795c2ef3484c700000000";
-const MK8DX_401_KEYPAGE: u64 = 0x1368000;
+const MK8DX_305: &str = "fe941ed5ba14be5d505698da1bbf4fe700000000";
+
+struct Game {
+    module_id: &'static str,
+    keypage: u64,
+    aspect_stores: &'static [u64],
+}
+
+const GAMES: &[Game] = &[
+    Game { module_id: MK8DX_401, keypage: 0x1368000, aspect_stores: &[0x3ccab8, 0x3cd25c, 0x3cd318] },
+    Game { module_id: MK8DX_305, keypage: 0x1364000, aspect_stores: &[0x3ca958, 0x3cb0fc, 0x3cb1b8] },
+];
 
 pub const GAME_PATCHES: &[GamePatch] = &[
     GamePatch { module_id: MK8DX_401, site: 0x4d8a04, from: &[0x9400_0038], to: &[0x9400_074E] },
@@ -119,6 +130,155 @@ pub const GAME_PATCHES: &[GamePatch] = &[
     },
     GamePatch { module_id: MK8DX_401, site: 0xb52a74, from: &[0xD503_201F, 0xD503_201F], to: &[0x305F_6E4F, 0x0000_0032] },
     GamePatch { module_id: MK8DX_401, site: 0x546a80, from: &[0x3400_23C8], to: &[0x1400_011E] },
+    GamePatch { module_id: MK8DX_401, site: 0x87de00, from: &[0xB219_0FE0, 0xF2C0_8700, 0xD65F_03C0], to: &[0xF000_5740, 0xF940_1000, 0xD65F_03C0] },
+    GamePatch {
+        module_id: MK8DX_401,
+        site: 0x3c7354,
+        from: &[0x320B_07E8, 0xF900_23E8, 0x52A0_B008, 0xF900_27E8],
+        to: &[0xB000_7D08, 0xF940_1508, 0x52A0_0C09, 0xA904_23E9],
+    },
+    GamePatch { module_id: MK8DX_401, site: 0x3d6820, from: &[0xB940_0BE8, 0xB940_0BE8, 0x3204_03E8], to: &[0xD000_7C88, 0xB940_3108, 0xD503_201F] },
+    GamePatch { module_id: MK8DX_401, site: 0x7e342c, from: &[0x52B6_0A08, 0x9100_63E0, 0xF900_0FE8], to: &[0xB000_5C28, 0xF940_1D08, 0xF900_0FE8] },
+    GamePatch {
+        module_id: MK8DX_401,
+        site: 0x7e3390,
+        from: &[
+            0xD100_83FF, 0xA901_7BFD, 0x9100_43FD, 0x52B8_3800, 0x940D_C3E0, 0x9100_23E0, 0x3209_07E1, 0x940D_C351, 0xF940_07E0,
+            0x3209_07E1, 0x97F6_7D50, 0xA941_7BFD, 0x9100_83FF, 0xD65F_03C0,
+        ],
+        to: &[
+            0xA9BE_7BFD, 0x9100_03FD, 0xB000_5C20, 0xF940_2000, 0x940D_C3E0, 0x9100_43E0, 0x3209_07E1, 0x940D_C351, 0xF940_0BE0,
+            0x3209_07E1, 0x97F6_7D50, 0xA8C2_7BFD, 0xD65F_03C0, 0xD503_201F,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_401,
+        site: 0xafecc8,
+        from: &[
+            0x3940_6008, 0x1100_0508, 0x3900_6008, 0xB940_0808, 0x3400_0308, 0xF940_0809, 0x3940_640A, 0x7100_095F, 0x5400_01A3,
+            0x39D0_252B, 0x3100_057F, 0x5400_0140, 0x3940_600C, 0x1ACA_098D, 0x1B0A_B1AA, 0x6B0B_015F, 0x5400_00E0, 0xF940_012A,
+            0xB400_00AA, 0x3200_03EA, 0x1400_0004, 0x2A1F_03EA, 0x1400_0002, 0x321F_03EA, 0x3910_212A, 0x9110_4129, 0xD100_0508,
+            0xB5FF_FD68, 0xD65F_03C0,
+        ],
+        to: &[
+            0x3940_600C, 0x1100_058C, 0x3900_600C, 0x3940_600C, 0xA940_A408, 0x3400_02E8, 0xD000_434E, 0x3941_21CE, 0x3940_640A,
+            0x6B0E_015F, 0x5400_0163, 0x39D0_252B, 0x37F8_012B, 0x1ACA_098D, 0x1B0A_B1AA, 0x6B0B_015F, 0x5400_00E0, 0xF940_012A,
+            0xB400_00AA, 0x5280_002A, 0x1400_0004, 0x2A1F_03EA, 0x1400_0002, 0x5280_004A, 0x3910_212A, 0x9110_4129, 0x5100_0508,
+            0x35FF_FDA8, 0xD65F_03C0,
+        ],
+    },
+    GamePatch { module_id: MK8DX_305, site: 0x4d54bc, from: &[0x9400_0035], to: &[0x9400_0711] },
+    GamePatch { module_id: MK8DX_305, site: 0x4d55a4, from: &[0x2A01_03F3], to: &[0x2A02_03F3] },
+    GamePatch { module_id: MK8DX_305, site: 0x4d55b4, from: &[0x1200_0276], to: &[0x1200_0036] },
+    GamePatch { module_id: MK8DX_305, site: 0x4d5660, from: &[0x1A88_0513], to: &[0xD503_201F] },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x4d70fc,
+        from: &[
+            0x2A1F_03E0, 0x940F_D165, 0xB400_0640, 0x940F_CD3C, 0xB400_0600, 0xF940_AC08, 0xB400_05C8, 0xB941_150A, 0x528C_1009,
+            0x0A2A_012A, 0x3500_054A, 0x7940_1108, 0x0A09_0108, 0x3400_04E8, 0x3200_07E8, 0x9100_63E0, 0xB900_1BE8, 0x940F_D12B,
+            0xD000_70E8, 0xF947_3908, 0x08DF_FD08, 0xAA00_03F4, 0x3700_01C8, 0xD000_70E0, 0xF947_3800, 0x9419_DBCE, 0x3400_0140,
+            0xD000_70E8, 0xF947_3D08, 0xD000_70E9, 0xF947_4129, 0x9100_4108, 0xF900_0128, 0xD000_70E0, 0xF947_3800, 0x9419_DBC8,
+            0xF940_0288, 0xD000_70E1, 0xF940_0108, 0xF947_4021, 0xAA14_03E0, 0xD63F_0100, 0x7200_001F, 0xAA13_03E0, 0x9A9F_1288,
+            0xF940_1908, 0x5283_9329, 0x2A1F_03E2, 0x3869_6908, 0x7100_011F, 0x1A9F_17E1, 0x97FF_F8F2,
+        ],
+        to: &[
+            0x1400_0034, 0xA95E_2408, 0xF940_2108, 0xF940_0D08, 0xF940_2129, 0xF940_0D29, 0xA95D_2C0A, 0xF940_214A, 0xF940_0D4A,
+            0xF940_216B, 0xF940_0D6B, 0x3941_610C, 0x121F_198C, 0x3901_610C, 0xBD40_3541, 0xBD40_3562, 0x1E21_3841, 0xBD40_3500,
+            0xB000_746E, 0x3940_61CE, 0x3400_016E, 0x1E2C_1002, 0x1E22_0822, 0x1E22_3800, 0xF940_190D, 0xF900_192D, 0x1E21_2802,
+            0xBD00_3522, 0x3941_612C, 0x321C_018C, 0x1400_0003, 0x3941_612C, 0x121F_198C, 0x3901_612C, 0xBD00_3560, 0x1E21_3802,
+            0xBD00_3542, 0x3941_616C, 0x321C_018C, 0x3901_616C, 0x3941_614C, 0x321C_018C, 0x3901_614C, 0x5280_0021, 0x5281_07A2,
+            0x7100_0DDF, 0x5281_078D, 0x1A82_01A2, 0x7100_09DF, 0x5281_072D, 0x1A82_01A2, 0x17FF_F8F2,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x3fa344,
+        from: &[
+            0x121B_0048, 0x121A_0049, 0x7100_0C3F, 0x5400_0188, 0x5280_014A, 0x1A81_054B, 0x7100_013F, 0x1A8B_0029, 0x5100_042B,
+            0x7100_003F, 0x1A8B_014A, 0x7100_011F, 0x1A8A_0121, 0x2A01_03E0, 0xD65F_03C0, 0x3400_0088, 0x3200_07E1, 0x2A01_03E0,
+            0xD65F_03C0, 0x3500_0109, 0x3738_0142, 0x3640_0082, 0x7100_283F, 0x321E_03E8, 0x1A81_0501, 0x2A01_03E0, 0xD65F_03C0,
+            0x2A1F_03E1, 0x2A01_03E0, 0xD65F_03C0, 0x5100_0428, 0x7100_103F, 0x5280_0149, 0x1A88_0121, 0x2A01_03E0, 0xD65F_03C0,
+        ],
+        to: &[
+            0xD000_7B4B, 0x3940_616B, 0x7100_017F, 0x5280_006C, 0x1A9F_158B, 0x5280_014A, 0x7100_0C3F, 0x5400_0168, 0x3728_00A2,
+            0x3630_0222, 0x531F_7820, 0x6B0B_003F, 0x1400_0004, 0x5100_0C20, 0x1301_7C00, 0x7100_003F, 0x1A80_0540, 0xD65F_03C0,
+            0x3728_0142, 0x3730_0162, 0x3738_0182, 0x3640_00A2, 0x7100_283F, 0x5280_0088, 0x1A81_0500, 0xD65F_03C0, 0x2A01_03E0,
+            0xD65F_03C0, 0x2A0B_03E0, 0xD65F_03C0, 0x2A1F_03E0, 0xD65F_03C0, 0x5100_0428, 0x7100_103F, 0x1A88_0140, 0xD65F_03C0,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x49fea8,
+        from: &[
+            0x5280_0D68, 0x5281_1B40, 0xB900_4A88, 0x9410_68A3, 0xAA00_03E1, 0xAA16_03E0, 0x9410_68B2, 0xB988_5A68, 0xB948_5E69,
+            0x6B09_011F, 0x5400_00CA, 0xF944_3269, 0xF828_7934, 0xB948_5A68, 0x1100_0508, 0xB908_5A68,
+        ],
+        to: &[
+            0xAA14_03F7, 0x1400_000F, 0xAA0D_03E9, 0xEB0C_015F, 0x5400_0080, 0xF840_8549, 0xF940_2129, 0xF940_0D29, 0xB940_352B,
+            0xB900_350B, 0x3941_610B, 0x321C_016B, 0x3901_610B, 0xAA09_03E8, 0x54FF_FE81, 0x1400_0032,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x49ff6c,
+        from: &[
+            0x5280_0D88, 0x5281_1C80, 0xB900_4A88, 0x9410_6872, 0xAA00_03E1, 0xAA16_03E0, 0x9410_6881, 0xB988_5A68, 0xB948_5E69,
+            0x6B09_011F, 0x5400_00CA, 0xF944_3269, 0xF828_7934, 0xB948_5A68, 0x1100_0508, 0xB908_5A68,
+        ],
+        to: &[
+            0xF940_2288, 0xF940_0D08, 0x3941_6109, 0x121F_1929, 0x3901_6109, 0xF940_22ED, 0xF940_0DAD, 0x3941_61A9, 0x121F_1929,
+            0x3901_61A9, 0xF944_326A, 0x9100_614C, 0xF840_8548, 0xF940_2108, 0xF940_0D08, 0x1400_058B,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x4a15d0,
+        from: &[
+            0xB948_5A68, 0x7100_111F, 0x5400_0083, 0xF944_3268, 0xF940_0D00, 0x1400_0002, 0xAA1F_03E0, 0x2A15_03E1,
+        ],
+        to: &[
+            0x1400_0013, 0xB940_8A89, 0x1200_7929, 0xB900_8A89, 0xB940_8AE9, 0x1200_7929, 0xB900_8AE9, 0x17FF_FA31,
+        ],
+    },
+    GamePatch { module_id: MK8DX_305, site: 0x543254, from: &[0x3400_23C8], to: &[0x1400_011E] },
+    GamePatch { module_id: MK8DX_305, site: 0x88a514, from: &[0xB219_0FE0, 0xF2C0_8700, 0xD65F_03C0], to: &[0xD000_56C0, 0xF940_1000, 0xD65F_03C0] },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x3c51e8,
+        from: &[0x320B_07E8, 0xF900_23E8, 0x52A0_B008, 0xF900_27E8],
+        to: &[0xF000_7CE8, 0xF940_1508, 0x52A0_0C09, 0xA904_23E9],
+    },
+    GamePatch { module_id: MK8DX_305, site: 0x3d46bc, from: &[0xB940_0BE8, 0xB940_0BE8, 0x3204_03E8], to: &[0x9000_7C88, 0xB940_3108, 0xD503_201F] },
+    GamePatch { module_id: MK8DX_305, site: 0x7f01f0, from: &[0x52B6_0A08, 0x9100_63E0, 0xF900_0FE8], to: &[0x9000_5BA8, 0xF940_1D08, 0xF900_0FE8] },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0x7f0154,
+        from: &[
+            0xD100_83FF, 0xA901_7BFD, 0x9100_43FD, 0x52B8_3800, 0x940D_7DF5, 0x9100_23E0, 0x3209_07E1, 0x940D_7D66, 0xF940_07E0,
+            0x3209_07E1, 0x97F6_7D4E, 0xA941_7BFD, 0x9100_83FF, 0xD65F_03C0,
+        ],
+        to: &[
+            0xA9BE_7BFD, 0x9100_03FD, 0x9000_5BA0, 0xF940_2000, 0x940D_7DF5, 0x9100_43E0, 0x3209_07E1, 0x940D_7D66, 0xF940_0BE0,
+            0x3209_07E1, 0x97F6_7D4E, 0xA8C2_7BFD, 0xD65F_03C0, 0xD503_201F,
+        ],
+    },
+    GamePatch {
+        module_id: MK8DX_305,
+        site: 0xafa2a8,
+        from: &[
+            0x3940_6008, 0x1100_0508, 0x3900_6008, 0xB940_0808, 0x3400_0308, 0xF940_0809, 0x3940_640A, 0x7100_095F, 0x5400_01A3,
+            0x39D0_252B, 0x3100_057F, 0x5400_0140, 0x3940_600C, 0x1ACA_098D, 0x1B0A_B1AA, 0x6B0B_015F, 0x5400_00E0, 0xF940_012A,
+            0xB400_00AA, 0x3200_03EA, 0x1400_0004, 0x2A1F_03EA, 0x1400_0002, 0x321F_03EA, 0x3910_212A, 0x9110_4129, 0xD100_0508,
+            0xB5FF_FD68, 0xD65F_03C0,
+        ],
+        to: &[
+            0x3940_600C, 0x1100_058C, 0x3900_600C, 0x3940_600C, 0xA940_A408, 0x3400_02E8, 0xD000_434E, 0x3941_21CE, 0x3940_640A,
+            0x6B0E_015F, 0x5400_0163, 0x39D0_252B, 0x37F8_012B, 0x1ACA_098D, 0x1B0A_B1AA, 0x6B0B_015F, 0x5400_00E0, 0xF940_012A,
+            0xB400_00AA, 0x5280_002A, 0x1400_0004, 0x2A1F_03EA, 0x1400_0002, 0x5280_004A, 0x3910_212A, 0x9110_4129, 0x5100_0508,
+            0x35FF_FDA8, 0xD65F_03C0,
+        ],
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -399,7 +559,10 @@ pub fn rewrite(nso: &nxfs::nso::Nso) -> Result<Output> {
     let bss_start = (nso.data.mem_offset + nso.data.size) as u64;
     let bss_end = bss_start + nso.bss_size as u64;
     let keypage = align_up(bss_end, keypage::SIZE);
-    ensure!(cx.module_id != MK8DX_401 || keypage == MK8DX_401_KEYPAGE, "game patches expect the keypage at {MK8DX_401_KEYPAGE:#x}");
+    let game = GAMES.iter().find(|g| g.module_id == cx.module_id);
+    if let Some(g) = game {
+        ensure!(keypage == g.keypage, "game patches expect the keypage at {:#x}", g.keypage);
+    }
     let tramp_base = keypage + keypage::SIZE;
     let mut e = Emitter { base: tramp_base, words: Vec::new(), fixups: Vec::new(), labels: Vec::new() };
     let mut patched = words.clone();
@@ -429,6 +592,16 @@ pub fn rewrite(nso: &nxfs::nso::Nso) -> Result<Output> {
         patches.push(Patch { kind: Kind::Svc, start: i as u64 * 4, end: i as u64 * 4 + 4, tramp, tramp_len: e.pc() - tramp });
     }
 
+    if let Some(g) = game {
+        for &site in g.aspect_stores {
+            let i = site as usize / 4;
+            ensure!(patched[i] == words[i], "camera aspect store at {site:#x} overlaps another rewrite");
+            let tramp = e.pc();
+            emit_aspect_scale(&mut e, keypage, words[i], site + 4).with_context(|| format!("camera aspect store at {site:#x}"))?;
+            patched[i] = asm::b(site, tramp)?;
+        }
+    }
+
     let tramp_end = e.pc();
     let mut image = vec![0u8; tramp_end as usize];
     image[..nso.image.len()].copy_from_slice(&nso.image);
@@ -449,6 +622,25 @@ pub fn rewrite(nso: &nxfs::nso::Nso) -> Result<Output> {
         tramp: (tramp_base, tramp_end),
         patches,
     })
+}
+
+fn emit_aspect_scale(e: &mut Emitter, keypage: u64, store: u32, back: u64) -> Result<()> {
+    ensure!(asm::is_str_s(store) && store & 0x1F == 0 && ![16, 17, SP].contains(&((store >> 5) & 0x1F)), "expected str s0, [xN, #imm], found {store:#010x}");
+    e.emit(asm::stp_pre(16, 17, SP, -32));
+    e.emit(asm::str_q(1, SP, 16));
+    let pc = e.pc();
+    e.emit(asm::adrp(16, pc, keypage)?);
+    e.emit(asm::ldr_s(1, 16, keypage::ASPECT));
+    e.emit(asm::fmov_w_s(17, 1));
+    e.emit(asm::lsl_w(17, 17, 1));
+    e.emit(asm::cbz_w(17, 8));
+    e.emit(asm::fmul_s(0, 0, 1));
+    e.emit(asm::ldr_q(1, SP, 16));
+    e.emit(asm::ldp_post(16, 17, SP, 32));
+    e.emit(store);
+    let pc = e.pc();
+    e.emit(asm::b(pc, back)?);
+    Ok(())
 }
 
 fn emit_region(cx: &Ctx, e: &mut Emitter, need: &[Need], start: usize, end: usize, kind: Kind, keypage: u64) -> Result<Kind> {
@@ -586,4 +778,49 @@ fn emit_jump_table(cx: &Ctx, e: &mut Emitter, sc: &Scratch, jt: &JumpTable, keyp
         sc.epilogue(e, false, target)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicorn_engine::{Arch, Mode, Prot, RegisterARM64 as R, Unicorn};
+
+    #[test]
+    fn aspect_scale_keeps_registers() {
+        let (code, keypage, back, camera) = (0x1000u64, 0x4000u64, 0x2000u64, 0x6000u64);
+        for (factor, expected) in [(1.22f32, 1.5f32 * 1.22), (0.75, 1.5 * 0.75), (0.0, 1.5), (-0.0, 1.5)] {
+            let mut e = Emitter { base: code, words: Vec::new(), fixups: Vec::new(), labels: Vec::new() };
+            emit_aspect_scale(&mut e, keypage, asm::str_s(0, 9, 0xB0), back).unwrap();
+            let bytes: Vec<u8> = e.words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let mut uc = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN).unwrap();
+            uc.mem_map(0, 0x10000, Prot::ALL).unwrap();
+            uc.mem_write(code, &bytes).unwrap();
+            uc.mem_write(keypage + keypage::ASPECT as u64, &factor.to_le_bytes()).unwrap();
+            uc.reg_write(R::CPACR_EL1, 3 << 20).unwrap();
+            uc.reg_write(R::SP, 0x9000).unwrap();
+            uc.reg_write(R::X9, camera).unwrap();
+            uc.reg_write(R::X16, 0x1616).unwrap();
+            uc.reg_write(R::X17, 0x1717).unwrap();
+            uc.reg_write(R::NZCV, 0x6000_0000).unwrap();
+            uc.reg_write(R::S0, 1.5f32.to_bits() as u64).unwrap();
+            uc.reg_write_long(R::Q1, &[0x5A; 16]).unwrap();
+            uc.emu_start(code, back, 0, 64).unwrap();
+            let mut stored = [0u8; 4];
+            uc.mem_read(camera + 0xB0, &mut stored).unwrap();
+            assert_eq!(f32::from_le_bytes(stored), expected);
+            assert_eq!(uc.reg_read(R::PC).unwrap(), back);
+            assert_eq!(uc.reg_read(R::SP).unwrap(), 0x9000);
+            assert_eq!((uc.reg_read(R::X16).unwrap(), uc.reg_read(R::X17).unwrap()), (0x1616, 0x1717));
+            assert_eq!(uc.reg_read(R::NZCV).unwrap(), 0x6000_0000);
+            assert_eq!(&*uc.reg_read_long(R::Q1).unwrap(), &[0x5A; 16]);
+        }
+    }
+
+    #[test]
+    fn aspect_scale_rejects_other_stores() {
+        let mut e = Emitter { base: 0x1000, words: Vec::new(), fixups: Vec::new(), labels: Vec::new() };
+        assert!(emit_aspect_scale(&mut e, 0x4000, asm::str_s(1, 9, 0xB0), 0x2000).is_err());
+        assert!(emit_aspect_scale(&mut e, 0x4000, asm::str_s(0, 16, 0xB0), 0x2000).is_err());
+        assert!(emit_aspect_scale(&mut e, 0x4000, asm::str(0, 9, 0xB0), 0x2000).is_err());
+    }
 }

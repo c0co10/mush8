@@ -1,6 +1,6 @@
 // Mush8 - audio.rs
 // Constantin Clerc (c22dev) - 0.1
-use crate::audio::{self, output::Output};
+use crate::audio::{self, output::{self, Output}};
 use crate::ipc::{Request, Response, Service, Stub, new_event, write_buffer};
 use crate::kernel::{KERNEL, Obj};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -51,7 +51,7 @@ impl Service for AudioDevice {
             1 | 7 => {}
             2 | 8 => rsp.data.extend_from_slice(&1.0f32.to_le_bytes()),
             4 | 11 | 12 => rsp.copy_handles.push(new_event(false)),
-            5 => rsp.push_u32(2),
+            5 => rsp.push_u32(output::CHANNELS as u32),
             _ => return Stub(self.name()).call(req, rsp),
         }
         0
@@ -73,18 +73,18 @@ impl Renderer {
         let Some(Obj::ReadableEvent(signal)) = KERNEL.lock().get(event) else { unreachable!() };
         let started = Arc::new(AtomicBool::new(false));
         let mixer = Arc::new(Mutex::new(audio::Renderer::new(config)));
-        let frame = 2 * config.sample_count as usize;
+        let block = output::CHANNELS * config.sample_count as usize;
         let (s, m) = (started.clone(), mixer.clone());
-        let output = audio::output::start(
+        let output = output::start(
             config.sample_rate,
-            frame,
-            Box::new(move |buf: &mut [i16]| {
+            config.sample_count as usize,
+            Box::new(move |buf: &mut [f32]| {
                 if !s.load(Relaxed) {
-                    buf.fill(0);
+                    buf.fill(0.0);
                     return;
                 }
                 let mut m = m.lock().unwrap();
-                for f in buf.chunks_exact_mut(frame) {
+                for f in buf.chunks_exact_mut(block) {
                     m.render(f);
                 }
                 drop(m);

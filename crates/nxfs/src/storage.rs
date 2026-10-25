@@ -82,3 +82,39 @@ impl Storage for Mem {
         Ok(())
     }
 }
+
+pub struct Patched {
+    base: DynStorage,
+    size: u64,
+    patches: Vec<(u64, Arc<[u8]>)>,
+}
+
+impl Patched {
+    pub fn new(base: DynStorage, size: u64, patches: Vec<(u64, Arc<[u8]>)>) -> Self {
+        Self { base, size, patches }
+    }
+}
+
+impl Storage for Patched {
+    fn size(&self) -> u64 {
+        self.size
+    }
+    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<()> {
+        let end = off + buf.len() as u64;
+        if end > self.size {
+            bail!("read past end of patched storage");
+        }
+        let from_base = self.base.size().saturating_sub(off).min(buf.len() as u64) as usize;
+        if from_base > 0 {
+            self.base.read_at(off, &mut buf[..from_base])?;
+        }
+        buf[from_base..].fill(0);
+        for (at, data) in &self.patches {
+            let (lo, hi) = (off.max(*at), end.min(at + data.len() as u64));
+            if lo < hi {
+                buf[(lo - off) as usize..(hi - off) as usize].copy_from_slice(&data[(lo - at) as usize..(hi - at) as usize]);
+            }
+        }
+        Ok(())
+    }
+}

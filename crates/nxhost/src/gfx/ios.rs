@@ -77,8 +77,6 @@ define_class!(
             let _: () = unsafe { msg_send![super(self), layoutSubviews] };
             let layer: Retained<CALayer> = self.layer();
             layer.setContentsScale(self.contentScaleFactor());
-            let b=self.bounds().size;
-            if b.width>=b.height { crate::display::update_size(b.width,b.height); }
         }
     }
 );
@@ -153,8 +151,6 @@ fn metal_view(scene: &UIWindowScene, window: &UIWindow, mtm: MainThreadMarker) -
     let layer: Retained<CAMetalLayer> = unsafe { Retained::cast_unchecked(view.layer()) };
     layer.setDevice(Some(&gpu().device.0));
     layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
-    let b=scene.screen().nativeBounds().size;
-    super::super::display::update_size(b.width.max(b.height),b.width.min(b.height));
     (view, layer)
 }
 
@@ -205,6 +201,18 @@ extern "C" fn play() {
     if let Some(mtm) = MainThreadMarker::new() {
         UIApplication::sharedApplication(mtm).setIdleTimerDisabled(true);
     }
+    UI.with(|ui| {
+        if let Some(ui) = ui.borrow().as_ref() {
+            let size = UICoordinateSpace::bounds(&*ui.window).size;
+            let inset = ui.window.safeAreaInsets();
+            let (long, short, edge) = if size.width >= size.height {
+                (size.width, size.height, inset.left.max(inset.right))
+            } else {
+                (size.height, size.width, inset.top.max(inset.bottom))
+            };
+            crate::aspect::set_screen(long, short, long - 2.0 * edge);
+        }
+    });
     if let Some(boot) = BOOT.lock().unwrap().take() {
         std::thread::Builder::new()
             .name("boot".into())

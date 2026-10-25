@@ -64,6 +64,17 @@ pub struct State {
 }
 
 const TEXTURE_MAGIC: u64 = 0x5845_5458_4E56_4E58;
+const BUFFER_MAGIC: u64 = 0x5246_4642_4E56_4E58;
+
+fn buffer(s: &State, obj: u64) -> Option<Buffer> {
+    if let Some(b) = s.buffers.get(&obj) {
+        return Some(*b);
+    }
+    if obj == 0 || rd::<u64>(obj) != BUFFER_MAGIC {
+        return None;
+    }
+    Some(Buffer { pool: rd(obj + 8), offset: rd(obj + 0x10), size: rd(obj + 0x18) })
+}
 
 pub fn texture(obj: u64) -> Option<Texture> {
     if obj == 0 || rd::<u64>(obj) != TEXTURE_MAGIC {
@@ -215,18 +226,37 @@ pub fn host_impl(name: &str) -> Option<HostFn> {
 
         "nvnBufferInitialize" => |a| {
             let b = a.0[1];
-            state().buffers.insert(a.0[0], Buffer { pool: rd(b + 8), offset: rd(b + 0x10), size: rd(b + 0x18) });
+            let buf = Buffer { pool: rd(b + 8), offset: rd(b + 0x10), size: rd(b + 0x18) };
+            unsafe {
+                let o = a.0[0] as *mut u64;
+                o.write_unaligned(BUFFER_MAGIC);
+                o.add(1).write_unaligned(buf.pool);
+                o.add(2).write_unaligned(buf.offset);
+                o.add(3).write_unaligned(buf.size);
+            }
+            state().buffers.insert(a.0[0], buf);
             1
         },
         "nvnBufferFinalize" => |a| {
             state().buffers.remove(&a.0[0]);
+            if a.0[0] != 0 {
+                unsafe { (a.0[0] as *mut u64).write_unaligned(0) };
+            }
             0
         },
         "nvnBufferGetAddress" | "nvnBufferMap" => |a| {
             let s = state();
-            s.buffers.get(&a.0[0]).and_then(|b| s.pools.get(&b.pool).map(|p| p.cpu + b.offset)).unwrap_or(0)
+            let addr = buffer(&s, a.0[0]).and_then(|b| s.pools.get(&b.pool).map(|p| p.cpu + b.offset));
+            if addr.is_none() {
+                static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    let lr = unsafe { *(a as *const _ as *const u64).sub(1) };
+                    eprintln!("[nvn] buffer {:#x} has no address (asked at {})", a.0[0], crate::diag::symbolize(lr));
+                }
+            }
+            addr.unwrap_or(0)
         },
-        "nvnBufferGetSize" => |a| state().buffers.get(&a.0[0]).map_or(0, |b| b.size),
+        "nvnBufferGetSize" => |a| buffer(&state(), a.0[0]).map_or(0, |b| b.size),
         "nvnBufferFlushMappedRange" | "nvnBufferInvalidateMappedRange" | "nvnBufferSetDebugLabel" => |_| 0,
 
         "nvnTextureInitialize" => |a| {
@@ -428,5 +458,86 @@ fn dump_shaders(program: u64, stages: &[(u64, u64)]) {
             let _ = std::fs::write(format!("work/shaders/p{n:03}_s{i}.code"), c);
         }
         eprintln!("[shader] program {program:#x} #{n} stage {i}: code {code:#x} control {control:#x}");
+    }
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    fn call(name: &str, obj: u64, builder: u64) -> u64 {
+        host_impl(name).unwrap()(&Args([obj, builder, 0, 0, 0, 0, 0, 0], [0; 8]))
+    }
+
+    struct Fixture {
+        storage: Box<[u8; 64]>,
+        pool: Box<[u64; 32]>,
+        object: Box<[u64; 16]>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut f = Self { storage: Box::new([0; 64]), pool: Box::new([0; 32]), object: Box::new([0; 16]) };
+            let pool_builder = [0, f.storage.as_ptr() as u64, 64, 0];
+            assert_eq!(call("nvnMemoryPoolInitialize", f.pool.as_mut_ptr() as u64, pool_builder.as_ptr() as u64), 1);
+            let builder = [0, f.pool.as_ptr() as u64, 8, 24];
+            assert_eq!(call("nvnBufferInitialize", f.object.as_mut_ptr() as u64, builder.as_ptr() as u64), 1);
+            f
+        }
+
+        fn address(&self) -> u64 {
+            self.storage.as_ptr() as u64 + 8
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let mut s = STATE.lock().unwrap();
+            s.buffers.remove(&(self.object.as_ptr() as u64));
+            s.pools.remove(&(self.pool.as_ptr() as u64));
+        }
+    }
+
+    #[test]
+    fn copied_buffer_preserves_address_mapping_and_size() {
+        let f = Fixture::new();
+        let copy = *f.object;
+        for name in ["nvnBufferGetAddress", "nvnBufferMap"] {
+            assert_eq!(call(name, f.object.as_ptr() as u64, 0), f.address());
+            assert_eq!(call(name, copy.as_ptr() as u64, 0), f.address(), "{name} lost the copied buffer's storage");
+        }
+        assert_eq!(call("nvnBufferGetSize", copy.as_ptr() as u64, 0), 24);
+    }
+
+    #[test]
+    fn finalized_buffer_does_not_regain_its_address() {
+        let mut f = Fixture::new();
+        let obj = f.object.as_mut_ptr() as u64;
+        call("nvnBufferFinalize", obj, 0);
+        for name in ["nvnBufferGetAddress", "nvnBufferMap", "nvnBufferGetSize"] {
+            assert_eq!(call(name, obj, 0), 0, "{name} resurrected a finalized buffer");
+        }
+    }
+
+    #[test]
+    fn finalizing_a_copy_does_not_finalize_the_original() {
+        let f = Fixture::new();
+        let mut copy = *f.object;
+        let copy_addr = copy.as_mut_ptr() as u64;
+        assert_eq!(call("nvnBufferGetAddress", copy_addr, 0), f.address());
+        call("nvnBufferFinalize", copy_addr, 0);
+        assert_eq!(call("nvnBufferGetAddress", copy_addr, 0), 0);
+        assert_eq!(call("nvnBufferGetSize", copy_addr, 0), 0);
+        assert_eq!(call("nvnBufferGetAddress", f.object.as_ptr() as u64, 0), f.address());
+    }
+
+    #[test]
+    fn null_and_uninitialized_buffer_objects_return_zero() {
+        let unknown = [0u64; 16];
+        for obj in [0, unknown.as_ptr() as u64] {
+            for name in ["nvnBufferGetAddress", "nvnBufferMap", "nvnBufferGetSize"] {
+                assert_eq!(call(name, obj, 0), 0);
+            }
+        }
     }
 }

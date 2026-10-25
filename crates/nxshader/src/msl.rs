@@ -1578,8 +1578,6 @@ struct Res {
 static inline device uint* gmem(constant Res& res, ulong ga) {
     ulong off = ga - res.heap_base;
     if (off >= res.heap_size || res.heap_chunk_size == 0ul) return reinterpret_cast<device uint*>(res.zero_gpu);
-    // Most devices fit the entire heap in one buffer; A15 needs only two.
-    // Keep both paths free of the expensive runtime 64-bit divide/remainder.
     if (off < res.heap_chunk_size) return reinterpret_cast<device uint*>(res.heap_gpu[0] + off);
     ulong second = off - res.heap_chunk_size;
     if (second < res.heap_chunk_size) return reinterpret_cast<device uint*>(res.heap_gpu[1] + second);

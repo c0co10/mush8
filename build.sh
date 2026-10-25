@@ -70,7 +70,7 @@ explain() {
   elif grep -E "untrusted|not trusted|ApplicationVerificationFailed" "$log" >/dev/null; then
     hint="Unlock your device and tap Trust when it asks to trust this Mac, then run this again."
   elif grep -iE "keys|NCA|decrypt" "$log" >/dev/null; then
-    hint="The game files couldn't be read. Check prod.keys matches your dump and the update is version 4.0.1."
+    hint="The game files couldn't be read. Check prod.keys matches your dump and the update is version 4.0.1 or 3.0.5."
   fi
   printf '\n\033[31mThe build failed.\033[0m\n'
   if [ -n "$hint" ]; then echo "$hint"; else echo "Last lines of the log:"; tail -15 "$log"; fi
@@ -125,6 +125,8 @@ if ! command -v brew >/dev/null; then
   eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 brew --version | head -1
+command -v cmake >/dev/null || { bold "Installing cmake"; brew install cmake; }
+command -v pkg-config >/dev/null || { bold "Installing pkgconf"; brew install pkgconf; }
 if [ "$PLATFORM" = 2 ]; then
   command -v xcodegen >/dev/null || { bold "Installing xcodegen"; brew install xcodegen; }
 fi
@@ -153,6 +155,9 @@ if [ "$PLATFORM" = 1 ]; then
   exit 0
 fi
 
+bold "Preparing Metal toolchain"
+xcodebuild -downloadComponent MetalToolchain
+
 bold "Preparing the iOS toolchain"
 rustup toolchain list | grep "^$TOOLCHAIN" >/dev/null || rustup toolchain install "$TOOLCHAIN" --profile minimal
 rustup target list --toolchain "$TOOLCHAIN" --installed | grep '^aarch64-apple-ios$' >/dev/null || rustup target add aarch64-apple-ios --toolchain "$TOOLCHAIN"
@@ -170,7 +175,8 @@ bold "Your game files"
 echo "The game's code and shaders are prepared from them on this Mac. Drag each file into this window, then press Enter."
 game_file prod.keys "prod.keys" KEYS
 game_file base.nsp "Mario Kart 8 Deluxe (base game .nsp)" BASE
-game_file upd4-0-1.nsp "Update 4.0.1 (.nsp)" UPDATE
+[ -L upd4-0-1.nsp ] && [ ! -e update.nsp ] && mv upd4-0-1.nsp update.nsp
+game_file update.nsp "Update 4.0.1 or 3.0.5 (.nsp)" UPDATE
 remember
 
 pick "How do you want to install it?" \
@@ -234,14 +240,14 @@ case "$OUTPUT" in
     mkdir -p "$OUT"
     cp build/Mush8.ipa "$OUT/Mush8.ipa"
     bold "Done: $OUT/Mush8.ipa"
-    echo "Install it with AltStore or SideStore, then copy prod.keys, base.nsp and upd4-0-1.nsp"
+    echo "Install it with AltStore or SideStore, then copy prod.keys, base.nsp and the update .nsp"
     echo "(and optionally dlc.nsp) into Files > On My iPhone > Mush8."
     open -R "$OUT/Mush8.ipa"
     ;;
   2)
     TEAM="$TEAM" BUNDLE_ID="$BUNDLE" FREE="$FREE" run ./make-ios.sh --install
     bold "Done: Mush8 is on your device"
-    echo "Copy prod.keys, base.nsp and upd4-0-1.nsp (and optionally dlc.nsp) into its folder:"
+    echo "Copy prod.keys, base.nsp and the update .nsp (and optionally dlc.nsp) into its folder:"
     echo "Finder > your device > Files > Mush8."
     echo "If it says \"Untrusted Developer\": Settings > General > VPN & Device Management, tap your account, Trust."
     ;;

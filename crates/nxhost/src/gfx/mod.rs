@@ -66,27 +66,26 @@ static HEAP: std::sync::RwLock<Option<&'static HeapBuffer>> = std::sync::RwLock:
 pub fn wrap_heap(base: u64, size: u64) -> bool {
     let device = &gpu().device.0;
     let limit = device.maxBufferLength() as u64;
-    // The override exercises the older-device path on a development Mac.
     let requested = std::env::var("NX_GPU_HEAP_CHUNK_BYTES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(limit);
     let chunk_size = requested.min(limit) / crate::mem::PAGE * crate::mem::PAGE;
-    if chunk_size == 0 || size.div_ceil(chunk_size) > MAX_HEAP_CHUNKS as u64 {
+    if base == 0 || size == 0 || base.checked_add(size).is_none() || chunk_size == 0 || size.div_ceil(chunk_size) > MAX_HEAP_CHUNKS as u64 {
         eprintln!("[gfx] cannot map heap: size {size:#x}, Metal maxBufferLength {limit:#x}, chunk {chunk_size:#x}");
         return false;
     }
     let mut chunks = Vec::new();
     let mut offset = 0;
     while offset < size {
-        let len = chunk_size.min(size-offset);
-        let ptr = std::ptr::NonNull::new((base+offset) as *mut std::ffi::c_void).unwrap();
+        let len = chunk_size.min(size - offset);
+        let ptr = std::ptr::NonNull::new((base + offset) as *mut std::ffi::c_void).unwrap();
         let Some(buffer) = (unsafe { device.newBufferWithBytesNoCopy_length_options_deallocator(ptr, len as usize, MTLResourceOptions::StorageModeShared, None) }) else {
-            eprintln!("[gfx] could not wrap heap chunk {:#x}+{len:#x}, Metal maxBufferLength {limit:#x}",base+offset);
+            eprintln!("[gfx] could not wrap heap chunk {:#x}+{len:#x}, Metal maxBufferLength {limit:#x}", base + offset);
             return false;
         };
         let gpu = buffer.gpuAddress();
-        chunks.push(HeapChunk { buffer: Shared(buffer), base: base+offset, size: len, gpu });
+        chunks.push(HeapChunk { buffer: Shared(buffer), base: base + offset, size: len, gpu });
         offset += len;
     }
-    eprintln!("[gfx] guest heap {base:#x}+{size:#x} mapped in {} GPU chunks (chunk {chunk_size:#x}, maxBufferLength {limit:#x})",chunks.len());
+    eprintln!("[gfx] guest heap {base:#x}+{size:#x} mapped in {} GPU chunks (chunk {chunk_size:#x}, maxBufferLength {limit:#x})", chunks.len());
     *HEAP.write().unwrap() = Some(Box::leak(Box::new(HeapBuffer { chunks, base, size, chunk_size })));
     true
 }
@@ -95,46 +94,56 @@ pub fn heap() -> Option<&'static HeapBuffer> {
     *HEAP.read().unwrap()
 }
 
+pub fn max_buffer_len() -> u64 {
+    gpu().device.0.maxBufferLength() as u64
+}
+
 impl HeapBuffer {
     pub fn gpu_addr(&self, addr: u64) -> Option<u64> {
         let (chunk, offset) = self.buffer_range(addr, 1)?;
         Some(chunk.gpu + offset as u64)
     }
 
-    /// A native Metal buffer range must fit within one chunk.
     pub fn buffer_range(&self, addr: u64, size: u64) -> Option<(&HeapChunk, usize)> {
         let offset = addr.checked_sub(self.base)?;
         let index = chunk_index(self.size, self.chunk_size, offset, size)?;
         let chunk = self.chunks.get(index)?;
-        Some((chunk, (addr-chunk.base) as usize))
+        Some((chunk, (addr - chunk.base) as usize))
     }
 
     pub fn gpu_addresses(&self) -> [u64; MAX_HEAP_CHUNKS] {
         let mut out = [0; MAX_HEAP_CHUNKS];
-        for (i, chunk) in self.chunks.iter().enumerate() { out[i] = chunk.gpu; }
+        for (i, chunk) in self.chunks.iter().enumerate() {
+            out[i] = chunk.gpu;
+        }
         out
     }
 }
 
 fn chunk_index(total: u64, chunk: u64, offset: u64, size: u64) -> Option<usize> {
     let end = offset.checked_add(size)?;
-    if chunk == 0 || size == 0 || end > total || offset/chunk != (end-1)/chunk { return None; }
-    Some((offset/chunk) as usize)
+    if chunk == 0 || size == 0 || end > total || offset / chunk != (end - 1) / chunk {
+        return None;
+    }
+    Some((offset / chunk) as usize)
 }
 
 #[cfg(test)]
 mod heap_tests {
     use super::chunk_index;
+
     #[test]
     fn ranges_respect_chunk_and_heap_edges() {
-        assert_eq!(chunk_index(250,100,99,1),Some(0));
-        assert_eq!(chunk_index(250,100,100,1),Some(1));
-        assert_eq!(chunk_index(250,100,99,2),None);
-        assert_eq!(chunk_index(250,100,200,50),Some(2));
-        assert_eq!(chunk_index(250,100,200,51),None);
-        assert_eq!(chunk_index(250,100,250,1),None);
-        assert_eq!(chunk_index(250,100,u64::MAX,2),None);
-        assert_eq!(chunk_index(250,100,0,0),None);
+        assert_eq!(chunk_index(250, 100, 99, 1), Some(0));
+        assert_eq!(chunk_index(250, 100, 100, 1), Some(1));
+        assert_eq!(chunk_index(250, 100, 99, 2), None);
+        assert_eq!(chunk_index(250, 100, 200, 50), Some(2));
+        assert_eq!(chunk_index(250, 100, 200, 51), None);
+        assert_eq!(chunk_index(250, 100, 250, 1), None);
+        assert_eq!(chunk_index(250, 100, u64::MAX, 2), None);
+        assert_eq!(chunk_index(250, 100, 0, 0), None);
+        assert_eq!(chunk_index(250, 0, 0, 1), None);
+        assert_eq!(chunk_index(0, 100, 0, 1), None);
     }
 }
 
@@ -199,8 +208,6 @@ pub fn run_app(title: &str, width: f64, height: f64) -> ! {
     let mtm = MainThreadMarker::new().expect("run_app must be called on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    let (width,height)=std::env::var("NX_WINDOW_SIZE").ok().and_then(|s| {let (w,h)=s.split_once('x')?; Some((w.parse::<f64>().ok()?,h.parse::<f64>().ok()?))}).filter(|(w,h)|*w>=320.0 && *h>=240.0).unwrap_or((width,height));
-    crate::display::update_size(width,height);
     let rect = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(width, height));
     let style = NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable | NSWindowStyleMask::Resizable;
     let window = unsafe {
@@ -218,6 +225,7 @@ pub fn run_app(title: &str, width: f64, height: f64) -> ! {
     layer.setDrawableSize(CGSize { width: width * scale, height: height * scale });
     view.setLayer(Some(&layer));
     let _ = LAYER.set(Shared(layer));
+    window.setContentAspectRatio(NSSize::new(width, height));
     window.center();
     overlay::set_game_window(&window);
     window.setCollectionBehavior(objc2_app_kit::NSWindowCollectionBehavior::FullScreenPrimary);
@@ -228,11 +236,6 @@ pub fn run_app(title: &str, width: f64, height: f64) -> ! {
     let win = window.clone();
     let swallow = block2::RcBlock::new(move |e: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
         let ev = unsafe { e.as_ref() };
-        if !win.isKeyWindow() { return e.as_ptr(); }
-        let command = ev.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Command);
-        if !command || ev.r#type() == objc2_app_kit::NSEventType::KeyUp {
-            crate::input::appkit_key(ev.keyCode(), ev.r#type() == objc2_app_kit::NSEventType::KeyDown);
-        }
         if ev.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Command) && ev.r#type() == objc2_app_kit::NSEventType::KeyDown {
             match ev.charactersIgnoringModifiers().map(|c| c.to_string().to_lowercase()).as_deref() {
                 Some("q" | "w") => std::process::exit(0),
@@ -249,13 +252,6 @@ pub fn run_app(title: &str, width: f64, height: f64) -> ! {
             Some(&window),
             None,
             &close,
-        )
-    };
-    std::mem::forget(observer);
-    let resign = block2::RcBlock::new(|_: std::ptr::NonNull<objc2_foundation::NSNotification>| crate::input::clear_appkit_keys());
-    let observer = unsafe {
-        objc2_foundation::NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
-            Some(objc2_app_kit::NSWindowDidResignKeyNotification), Some(&window), None, &resign,
         )
     };
     std::mem::forget(observer);
@@ -490,16 +486,29 @@ fn present_params(tex: &Texture, flip: bool) -> (PresentParams, f64) {
     (p, (w / h) as f64)
 }
 
-pub fn present(tex: &Texture, flip: bool) {
+pub fn present(tex: Option<&Texture>, flip: bool) {
     #[cfg(target_os = "ios")]
     if !ios::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
+    let turbo = next_frame();
+    let interval = PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed);
+    if turbo {
+        pace(FRAME / 4);
+        static SHOWN: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let mut shown = SHOWN.lock().unwrap();
+        if shown.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(50)) {
+            return;
+        }
+        *shown = Some(std::time::Instant::now());
+    } else if interval > 0 {
+        pace(FRAME * interval);
+    }
+    let Some(tex) = tex else { return };
     let Some(layer) = LAYER.get() else { return };
     let bounds = layer.0.bounds().size;
     let scale = layer.0.contentsScale();
     let size = CGSize { width: (bounds.width * scale).round().max(1.0), height: (bounds.height * scale).round().max(1.0) };
-    crate::display::update_size(size.width,size.height);
     if layer.0.drawableSize() != size {
         layer.0.setDrawableSize(size);
     }
@@ -514,9 +523,9 @@ pub fn present(tex: &Texture, flip: bool) {
     att.setStoreAction(MTLStoreAction::Store);
     if let Some(enc) = cb.renderCommandEncoderWithDescriptor(&desc) {
         let (params, aspect) = present_params(tex, flip);
+        let aspect = aspect * crate::aspect::stretch();
         ASPECT.store(aspect.to_bits(), std::sync::atomic::Ordering::Relaxed);
-        let output_aspect=if crate::display::active() {size.width/size.height} else {aspect};
-        enc.setViewport(letterbox(output_aspect, size.width, size.height));
+        enc.setViewport(letterbox(aspect, size.width, size.height));
         enc.setRenderPipelineState(&g.present.0);
         unsafe {
             let p = std::ptr::NonNull::from(&params).cast();
@@ -529,8 +538,7 @@ pub fn present(tex: &Texture, flip: bool) {
         enc.endEncoding();
     }
     let d: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*drawable);
-    let interval = PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed);
-    if interval == 0 {
+    if interval == 0 || turbo {
         cb.presentDrawable(d);
     } else {
         cb.presentDrawable_afterMinimumDuration(d, interval as f64 / 60.0);
@@ -576,6 +584,50 @@ fn letterbox(aspect: f64, w: f64, h: f64) -> MTLViewport {
 }
 
 static PRESENT_INTERVAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+const FRAME: std::time::Duration = std::time::Duration::from_nanos(16_666_667);
+static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+static TURBO_UNTIL: std::sync::LazyLock<Option<f32>> = std::sync::LazyLock::new(|| env_secs("NX_TURBO"));
+
+fn env_secs(k: &str) -> Option<f32> {
+    std::env::var(k).ok().and_then(|v| v.parse().ok())
+}
+
+pub fn clock() -> f32 {
+    if TURBO_UNTIL.is_some() { FRAMES.load(std::sync::atomic::Ordering::Relaxed) as f32 / 60.0 } else { START.elapsed().as_secs_f32() }
+}
+
+pub fn turbo() -> bool {
+    TURBO_UNTIL.is_some_and(|u| clock() < u)
+}
+
+fn next_frame() -> bool {
+    static EXIT: std::sync::LazyLock<Option<f32>> = std::sync::LazyLock::new(|| env_secs("NX_EXIT_AT"));
+    let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let t = n as f32 / 60.0;
+    if n % 600 == 0 && std::env::var_os("NX_FPS").is_some() {
+        eprintln!("[clock] game {t:.0} s at {:.1} s", START.elapsed().as_secs_f32());
+    }
+    if EXIT.is_some_and(|e| t >= e) {
+        eprintln!("[host] NX_EXIT_AT reached");
+        std::process::exit(0);
+    }
+    TURBO_UNTIL.is_some_and(|u| t < u)
+}
+
+fn pace(period: std::time::Duration) {
+    static DUE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let mut due = DUE.lock().unwrap();
+    let now = std::time::Instant::now();
+    let mut next = due.unwrap_or(now);
+    if now < next {
+        std::thread::sleep(next - now);
+    } else if now - next > period * 2 {
+        next = now;
+    }
+    *due = Some(next + period);
+}
 
 pub fn set_present_interval(n: u32) {
     PRESENT_INTERVAL.store(n, std::sync::atomic::Ordering::Relaxed);

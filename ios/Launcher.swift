@@ -29,14 +29,17 @@ let configURL = docsURL.appendingPathComponent("config.json")
 
 final class Settings: ObservableObject {
     @Published var network = "off"
-    @Published var language = "system"
     @Published var lanPlayServer = ""
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var spatial = true
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var handheld = true
     @Published var phonePads = false
+    @Published var fillScreen = true
+    @Published var hudAtEdges = true
+    @Published var hudScale = 1.0
     var extra: [String: Any] = [:]
     private var autosave: AnyCancellable?
 
@@ -47,31 +50,37 @@ final class Settings: ObservableObject {
         guard let data = try? Data(contentsOf: configURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         extra = json
-        language = json["language"] as? String ?? "system"
         network = json["network"] as? String ?? ((json["lan"] as? Bool ?? false) ? "lan" : "off")
         lanPlayServer = json["lanplay_server"] as? String ?? ""
         prewarm = json["prewarm_pipelines"] as? Bool ?? true
         rumble = json["rumble"] as? Bool ?? true
+        spatial = json["spatial_audio"] as? Bool ?? true
         backgroundCompile = json["background_compile"] as? Bool ?? true
         motion = json["motion_controls"] as? Bool ?? false
         handheld = json["handheld"] as? Bool ?? true
         phonePads = json["phone_pads"] as? Bool ?? false
+        fillScreen = json["aspect"] as? String != "16:9"
+        hudAtEdges = json["hud"] as? String != "center"
+        hudScale = json["hud_scale"] as? Double ?? 1.0
     }
 
     func save() throws {
         var json = extra
         json["network"] = network
-        json["language"] = language
         json["lanplay_server"] = lanPlayServer
         json["lan"] = nil
         json["extra_pads"] = nil
         json["prewarm_pipelines"] = prewarm
         json["rumble"] = rumble
+        json["spatial_audio"] = spatial
         json["background_compile"] = backgroundCompile
         json["motion"] = nil
         json["motion_controls"] = motion
         json["handheld"] = handheld
         json["phone_pads"] = phonePads
+        json["aspect"] = fillScreen ? "fill" : "16:9"
+        json["hud"] = hudAtEdges ? "edges" : "center"
+        json["hud_scale"] = hudScale
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: configURL)
     }
@@ -105,12 +114,10 @@ struct GameFile: Identifiable {
     let name: String
     var optional = false
     var present: Bool {
-        let url = docsURL.appendingPathComponent(name)
-        var directory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) {
-            return !directory.boolValue || !((try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []).isEmpty
-        }
-        return name == "base.nsp" && FileManager.default.fileExists(atPath: docsURL.appendingPathComponent("base.nca").path)
+        let path = docsURL.appendingPathComponent(name).path
+        var dir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &dir) else { return false }
+        return !dir.boolValue || !((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).isEmpty
     }
 
     func status(_ found: Bool) -> String {
@@ -141,10 +148,10 @@ func broadcastAvailable() -> Bool {
 
 let gameFiles = [
     GameFile(id: "Base Game", name: "base.nsp"),
-    GameFile(id: "Update", name: "upd4-0-1.nsp"),
+    GameFile(id: "Update", name: "update.nsp"),
     GameFile(id: "Booster Course Pass", name: "dlc.nsp", optional: true),
     GameFile(id: "Console Keys", name: "prod.keys"),
-    GameFile(id: "Firmware", name: "Firmware", optional: true),
+    GameFile(id: "Firmware", name: "Firmware"),
 ]
 
 final class Files: ObservableObject {
@@ -195,12 +202,12 @@ final class Files: ObservableObject {
         if n.hasSuffix(".nsp") {
             switch nspKind(url) {
             case "base": return "base.nsp"
-            case "update": return "upd4-0-1.nsp"
+            case "update": return "update.nsp"
             case "dlc": return "dlc.nsp"
             case "other": return url.lastPathComponent
             default: break
             }
-            if n.contains("upd") || n.contains("update") || n.contains("v4") { return "upd4-0-1.nsp" }
+            if n.contains("upd") || n.contains("update") { return "update.nsp" }
             if n.contains("dlc") || n.contains("booster") || n.contains("aoc") { return "dlc.nsp" }
             if n.contains("base") || n.contains("mario") { return "base.nsp" }
         }
@@ -230,7 +237,6 @@ struct LauncherView: View {
                     importView
                 }
                 Button("Use as a controller for a Mac") {
-                    try? s.save()
                     network.stop()
                     controller()
                 }
@@ -241,27 +247,6 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity)
             Form {
                 if !files.ready { gameFilesSection }
-                Section("游戏语言 / Game language") {
-                    Picker("Language", selection: $s.language) {
-                        Text("跟随系统 / System").tag("system")
-                        Text("简体中文").tag("zh-Hans")
-                        Text("繁體中文").tag("zh-Hant")
-                        Text("English (US)").tag("en-US")
-                        Text("English (UK)").tag("en-GB")
-                        Text("日本語").tag("ja")
-                        Text("한국어").tag("ko")
-                        Text("Français").tag("fr")
-                        Text("Français (Canada)").tag("fr-CA")
-                        Text("Deutsch").tag("de")
-                        Text("Italiano").tag("it")
-                        Text("Español").tag("es")
-                        Text("Español (Latinoamérica)").tag("es-419")
-                        Text("Nederlands").tag("nl")
-                        Text("Português (Portugal)").tag("pt-PT")
-                        Text("Русский").tag("ru")
-                    }
-                    caption("仅更改游戏内语言，下次点 Play 生效。Launcher language is unchanged.")
-                }
                 Section("Multiplayer") {
                     Picker("Mode", selection: $s.network) {
                         Text("Off").tag("off")
@@ -294,6 +279,11 @@ struct LauncherView: View {
                     Toggle("Motion controls", isOn: $s.motion)
                 }
                 Section {
+                    Toggle("Spatial audio", isOn: $s.spatial)
+                } footer: {
+                    Text("Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
+                }
+                Section {
                     Toggle("iPhone controllers", isOn: $s.phonePads)
                 } footer: {
                     Text("Nearby iPhones can join as players with \"Use as a controller\"")
@@ -305,6 +295,25 @@ struct LauncherView: View {
                     }
                 } footer: {
                     Text("Handheld renders at 720p: lighter on the GPU and battery")
+                }
+                Section {
+                    Picker("Screen", selection: $s.fillScreen) {
+                        Text("16:9").tag(false)
+                        Text("Fill screen").tag(true)
+                    }
+                    if s.fillScreen {
+                        Picker("HUD", selection: $s.hudAtEdges) {
+                            Text("Screen edges").tag(true)
+                            Text("Centered").tag(false)
+                        }
+                    }
+                    HStack {
+                        Text("HUD size")
+                        Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
+                        Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Fill screen widens the race to the whole display, menus and HUD keep their proportions")
                 }
                 Section {
                     Toggle("Prewarm pipelines", isOn: $s.prewarm)
@@ -371,7 +380,7 @@ struct LauncherView: View {
                 Button("Import game files") { picking = true }
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
-                Text("Import prod.keys, the base game and update .nsp files (+DLC/Firmware)/put them in On My iPhone")
+                Text("Import prod.keys, the base game and update .nsp files and the Firmware folder (+DLC)/put them in On My iPhone")
                     .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             if let e = files.error { Text(e).foregroundStyle(.red).font(.callout).multilineTextAlignment(.center) }
