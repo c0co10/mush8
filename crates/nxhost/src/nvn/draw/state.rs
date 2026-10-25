@@ -106,9 +106,75 @@ pub struct Res {
     pub alpha_ref: f32,
     pub alpha_func: u32,
     pub heap_base: u64,
-    pub heap_gpu: u64,
+    pub heap_gpu: [u64; gfx::MAX_HEAP_CHUNKS],
     pub heap_size: u64,
+    pub heap_chunk_size: u64,
     pub zero_gpu: u64,
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod segmented_heap_tests {
+    use super::*;
+    use objc2::runtime::ProtocolObject;
+
+    #[test]
+    #[ignore = "requires a real Metal GPU"]
+    fn gpu_reads_and_writes_across_heap_chunks() {
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let page = crate::mem::PAGE as usize;
+            let size = page * 5;
+            let chunk = page * 2;
+            let mem = libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANON, -1, 0);
+            assert_ne!(mem, libc::MAP_FAILED);
+            std::env::set_var("NX_GPU_HEAP_CHUNK_BYTES", chunk.to_string());
+            let mapped = gfx::wrap_heap(mem as u64, size as u64);
+            std::env::remove_var("NX_GPU_HEAP_CHUNK_BYTES");
+            assert!(mapped);
+            let h = gfx::heap().unwrap();
+            assert_eq!(h.chunks.iter().map(|c| c.size).collect::<Vec<_>>(), vec![chunk as u64, chunk as u64, page as u64]);
+            assert!(h.buffer_range(h.base + chunk as u64 - 4, 8).is_none());
+            assert!(h.buffer_range(h.base + (size - 4) as u64, 4).is_some());
+            assert!(h.buffer_range(h.base + (size - 4) as u64, 8).is_none());
+            let offsets = [0, chunk - 4, chunk, chunk * 2 - 4, chunk * 2, size - 4];
+            let values = [17u32, 41, 82, 123, 164, 205];
+            let words = std::slice::from_raw_parts_mut(mem as *mut u32, size / 4);
+            for (&off, &value) in offsets.iter().zip(&values) {
+                words[off / 4] = value;
+            }
+            let dev = &gfx::gpu().device.0;
+            let offsets = offsets.map(|v| format!("{v}ul")).join(", ");
+            let source = format!("{}\nkernel void heap_probe(constant Res& r [[buffer(0)]], device uint* out [[buffer(1)]]) {{ ulong offsets[6] = {{{offsets}}}; for (uint i = 0; i < 6; ++i) {{ out[i] = *gmem(r, r.heap_base + offsets[i]); *gmem(r, r.heap_base + offsets[i]) = out[i] + 1000u; }} out[6] = *gmem(r, r.heap_base + r.heap_size); out[7] = *gmem(r, r.heap_base - 4ul); }}", nxshader::prelude());
+            let lib = dev.newLibraryWithSource_options_error(&NSString::from_str(&source), None).unwrap();
+            let func = lib.newFunctionWithName(&NSString::from_str("heap_probe")).unwrap();
+            let pipeline = dev.newComputePipelineStateWithFunction_error(&func).unwrap();
+            let out = dev.newBufferWithLength_options(32, MTLResourceOptions::StorageModeShared).unwrap();
+            let mut res: Res = std::mem::zeroed();
+            res.heap_base = h.base;
+            res.heap_size = h.size;
+            res.heap_chunk_size = h.chunk_size;
+            res.heap_gpu = h.gpu_addresses();
+            res.zero_gpu = gfx::gpu().zeros.0.gpuAddress();
+            *(gfx::gpu().zeros.0.contents().as_ptr() as *mut u32) = 0;
+            let cb = gfx::gpu().queue.0.commandBuffer().unwrap();
+            let enc = cb.computeCommandEncoder().unwrap();
+            enc.setComputePipelineState(&pipeline);
+            for chunk in &h.chunks {
+                enc.useResource_usage(ProtocolObject::from_ref(&*chunk.buffer.0), MTLResourceUsage::Read | MTLResourceUsage::Write);
+            }
+            enc.useResource_usage(ProtocolObject::from_ref(&*gfx::gpu().zeros.0), MTLResourceUsage::Read);
+            enc.setBytes_length_atIndex(std::ptr::NonNull::from(&res).cast(), size_of::<Res>(), 0);
+            enc.setBuffer_offset_atIndex(Some(&out), 0, 1);
+            enc.dispatchThreadgroups_threadsPerThreadgroup(MTLSize { width: 1, height: 1, depth: 1 }, MTLSize { width: 1, height: 1, depth: 1 });
+            enc.endEncoding();
+            cb.commit();
+            cb.waitUntilCompleted();
+            assert_eq!(cb.status(), MTLCommandBufferStatus::Completed);
+            assert_eq!(std::slice::from_raw_parts(out.contents().as_ptr() as *const u32, 8), &[17, 41, 82, 123, 164, 205, 0, 0]);
+            for (off, value) in [0, chunk - 4, chunk, chunk * 2 - 4, chunk * 2, size - 4].into_iter().zip(values) {
+                assert_eq!(words[off / 4], value + 1000);
+            }
+        });
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]

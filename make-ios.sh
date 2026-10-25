@@ -31,7 +31,8 @@ BUNDLE_ID="${BUNDLE_ID:-ch.cclerc.mush8}"
 TOOLCHAIN=1.98.1
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 PATCHED="$PWD/work/v-upd/patched"
-CACHE=work/shader_cache_ios.noindex
+CACHE_ROOT=work/shader_cache_ios.noindex
+CACHE="$CACHE_ROOT/heap-segments-v2"
 RES=target/ios-res
 
 cargo build --release
@@ -55,7 +56,7 @@ mv "$LIST.new" "$LIST"
 
 if [ "$SHADERS" = 1 ] || [ ! -f "$CACHE/index.tsv" ] || [ "$(cat "$CACHE/pipelines.stamp" 2>/dev/null)" != "$STAMP" ]; then
   echo "precompiling shaders for iOS (log: work/precompile_ios.log)…"
-  NX_SHADER_SDK=iphoneos NX_SHADER_CACHE="$CACHE" ./target/release/nxhost --update "$UPDATE" --precompile > work/precompile_ios.log 2>&1 \
+  NX_SHADER_SDK=iphoneos NX_SHADER_CACHE="$CACHE_ROOT" ./target/release/nxhost --update "$UPDATE" --precompile > work/precompile_ios.log 2>&1 \
     || { tail -20 work/precompile_ios.log; exit 1; }
   tail -3 work/precompile_ios.log
   echo "$STAMP" > "$CACHE/pipelines.stamp"
@@ -67,9 +68,9 @@ NX_MODULES_DIR="$PATCHED" IPHONEOS_DEPLOYMENT_TARGET=26.0 \
     -- -C link-arg=-Wl,-no_compact_unwind
 
 rm -rf "$RES"
-mkdir -p "$RES/modules" "$RES/shaders"
+mkdir -p "$RES/modules" "$RES/shaders/heap-segments-v2"
 cp "$PATCHED"/*.layout work/v-upd/exefs/main.npdm "$RES/modules/"
-cp -c "$CACHE"/*.metallib "$CACHE"/index.tsv "$CACHE"/guest.tsv "$RES/shaders/"
+cp -c "$CACHE"/*.metallib "$CACHE"/index.tsv "$CACHE"/guest.tsv "$RES/shaders/heap-segments-v2/"
 cp "$LIST" "$RES/shaders/pipelines.tsv"
 
 (cd ios && xcodegen generate --quiet)

@@ -45,30 +45,49 @@ impl<T: objc2::Message> Clone for Shared<T> {
 
 pub type Buffer = ProtocolObject<dyn MTLBuffer>;
 
-pub struct HeapBuffer {
+pub const MAX_HEAP_CHUNKS: usize = 16;
+
+pub struct HeapChunk {
     pub buffer: Shared<Buffer>,
     pub base: u64,
     pub size: u64,
     pub gpu: u64,
 }
 
+pub struct HeapBuffer {
+    pub chunks: Vec<HeapChunk>,
+    pub base: u64,
+    pub size: u64,
+    pub chunk_size: u64,
+}
+
 static HEAP: std::sync::RwLock<Option<&'static HeapBuffer>> = std::sync::RwLock::new(None);
 
 pub fn wrap_heap(base: u64, size: u64) -> bool {
-    let ptr = std::ptr::NonNull::new(base as *mut std::ffi::c_void).unwrap();
-    let b = unsafe { gpu().device.0.newBufferWithBytesNoCopy_length_options_deallocator(ptr, size as usize, MTLResourceOptions::StorageModeShared, None) };
-    match b {
-        Some(b) => {
-            let gpu = b.gpuAddress();
-            eprintln!("[gfx] guest heap {base:#x}+{size:#x} mapped for the GPU at {gpu:#x}");
-            *HEAP.write().unwrap() = Some(Box::leak(Box::new(HeapBuffer { buffer: Shared(b), base, size, gpu })));
-            true
-        }
-        None => {
-            eprintln!("[gfx] could not wrap the guest heap {base:#x}+{size:#x} for the GPU");
-            false
-        }
+    let device = &gpu().device.0;
+    let limit = device.maxBufferLength() as u64;
+    let requested = std::env::var("NX_GPU_HEAP_CHUNK_BYTES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(limit);
+    let chunk_size = requested.min(limit) / crate::mem::PAGE * crate::mem::PAGE;
+    if base == 0 || size == 0 || base.checked_add(size).is_none() || chunk_size == 0 || size.div_ceil(chunk_size) > MAX_HEAP_CHUNKS as u64 {
+        eprintln!("[gfx] cannot map heap: size {size:#x}, Metal maxBufferLength {limit:#x}, chunk {chunk_size:#x}");
+        return false;
     }
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+    while offset < size {
+        let len = chunk_size.min(size - offset);
+        let ptr = std::ptr::NonNull::new((base + offset) as *mut std::ffi::c_void).unwrap();
+        let Some(buffer) = (unsafe { device.newBufferWithBytesNoCopy_length_options_deallocator(ptr, len as usize, MTLResourceOptions::StorageModeShared, None) }) else {
+            eprintln!("[gfx] could not wrap heap chunk {:#x}+{len:#x}, Metal maxBufferLength {limit:#x}", base + offset);
+            return false;
+        };
+        let gpu = buffer.gpuAddress();
+        chunks.push(HeapChunk { buffer: Shared(buffer), base: base + offset, size: len, gpu });
+        offset += len;
+    }
+    eprintln!("[gfx] guest heap {base:#x}+{size:#x} mapped in {} GPU chunks (chunk {chunk_size:#x}, maxBufferLength {limit:#x})", chunks.len());
+    *HEAP.write().unwrap() = Some(Box::leak(Box::new(HeapBuffer { chunks, base, size, chunk_size })));
+    true
 }
 
 pub fn heap() -> Option<&'static HeapBuffer> {
@@ -81,7 +100,50 @@ pub fn max_buffer_len() -> u64 {
 
 impl HeapBuffer {
     pub fn gpu_addr(&self, addr: u64) -> Option<u64> {
-        (addr >= self.base && addr < self.base + self.size).then(|| self.gpu + (addr - self.base))
+        let (chunk, offset) = self.buffer_range(addr, 1)?;
+        Some(chunk.gpu + offset as u64)
+    }
+
+    pub fn buffer_range(&self, addr: u64, size: u64) -> Option<(&HeapChunk, usize)> {
+        let offset = addr.checked_sub(self.base)?;
+        let index = chunk_index(self.size, self.chunk_size, offset, size)?;
+        let chunk = self.chunks.get(index)?;
+        Some((chunk, (addr - chunk.base) as usize))
+    }
+
+    pub fn gpu_addresses(&self) -> [u64; MAX_HEAP_CHUNKS] {
+        let mut out = [0; MAX_HEAP_CHUNKS];
+        for (i, chunk) in self.chunks.iter().enumerate() {
+            out[i] = chunk.gpu;
+        }
+        out
+    }
+}
+
+fn chunk_index(total: u64, chunk: u64, offset: u64, size: u64) -> Option<usize> {
+    let end = offset.checked_add(size)?;
+    if chunk == 0 || size == 0 || end > total || offset / chunk != (end - 1) / chunk {
+        return None;
+    }
+    Some((offset / chunk) as usize)
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use super::chunk_index;
+
+    #[test]
+    fn ranges_respect_chunk_and_heap_edges() {
+        assert_eq!(chunk_index(250, 100, 99, 1), Some(0));
+        assert_eq!(chunk_index(250, 100, 100, 1), Some(1));
+        assert_eq!(chunk_index(250, 100, 99, 2), None);
+        assert_eq!(chunk_index(250, 100, 200, 50), Some(2));
+        assert_eq!(chunk_index(250, 100, 200, 51), None);
+        assert_eq!(chunk_index(250, 100, 250, 1), None);
+        assert_eq!(chunk_index(250, 100, u64::MAX, 2), None);
+        assert_eq!(chunk_index(250, 100, 0, 0), None);
+        assert_eq!(chunk_index(250, 0, 0, 1), None);
+        assert_eq!(chunk_index(0, 100, 0, 1), None);
     }
 }
 
