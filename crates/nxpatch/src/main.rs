@@ -3,6 +3,7 @@
 mod asm;
 mod classify;
 mod equiv;
+mod ips;
 mod rewrite;
 
 use anyhow::{Context, Result};
@@ -29,6 +30,8 @@ enum Cmd {
         nso: Vec<PathBuf>,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        patch: Vec<PathBuf>,
     },
     Verify {
         nso: Vec<PathBuf>,
@@ -43,7 +46,10 @@ enum Cmd {
         target: u64,
     },
     NvnUsage { nso: PathBuf },
-    Stamp,
+    Stamp {
+        #[arg(long)]
+        patch: Vec<PathBuf>,
+    },
     Dis {
         nso: PathBuf,
         #[arg(value_parser = parse_hex)]
@@ -55,10 +61,21 @@ enum Cmd {
     },
 }
 
-fn stamp() -> String {
-    let src = [include_str!("main.rs"), include_str!("rewrite.rs"), include_str!("asm.rs"), include_str!("classify.rs"), include_str!("equiv.rs")];
-    let h = src.iter().flat_map(|s| s.bytes()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
-    format!("{h:016x}")
+fn fnv(h: u64, bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(h, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+}
+
+fn stamp(patches: &[PathBuf]) -> Result<String> {
+    let src = [include_str!("main.rs"), include_str!("rewrite.rs"), include_str!("asm.rs"), include_str!("classify.rs"), include_str!("equiv.rs"), include_str!("ips.rs")];
+    let h = fnv(0xcbf2_9ce4_8422_2325, src.iter().flat_map(|s| s.bytes()));
+    if patches.is_empty() {
+        return Ok(format!("{h:016x}"));
+    }
+    let mut p = 0xcbf2_9ce4_8422_2325u64;
+    for path in patches {
+        p = fnv(p, std::fs::read(path).with_context(|| path.display().to_string())?);
+    }
+    Ok(format!("{h:016x}-{p:016x}"))
 }
 
 fn parse_hex(s: &str) -> Result<u64, std::num::ParseIntError> {
@@ -74,17 +91,28 @@ fn main() -> Result<()> {
                 classify::report(m.text_bytes(), examples)?;
             }
         }
-        Cmd::Rewrite { nso, out } => {
+        Cmd::Rewrite { nso, out, patch } => {
             std::fs::create_dir_all(&out)?;
+            let _ = std::fs::remove_file(out.join("nxpatch.stamp"));
+            let patches = patch.iter().map(|p| ips::load(p)).collect::<Result<Vec<_>>>()?;
+            let mut used = vec![false; patches.len()];
             for p in nso {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                let m = nxfs::nso::Nso::parse(&std::fs::read(&p)?)?;
+                let mut m = nxfs::nso::Nso::parse(&std::fs::read(&p)?)?;
+                for (i, c) in patches.iter().enumerate().filter(|(_, c)| c.matches(&m.module_id)) {
+                    let bytes = c.apply(&mut m.image).with_context(|| name.clone())?;
+                    println!("{name}: applied {} ({bytes} bytes)", c.source.display());
+                    used[i] = true;
+                }
                 let o = rewrite::rewrite(&m).with_context(|| name.clone())?;
                 write_output(&out, &name, &m, &o)?;
             }
-            std::fs::write(out.join("nxpatch.stamp"), stamp())?;
+            for (c, _) in patches.iter().zip(&used).filter(|(_, u)| !**u) {
+                println!("skipped {}: it is for build {}, not this game update", c.source.display(), c.build_id);
+            }
+            std::fs::write(out.join("nxpatch.stamp"), stamp(&patch)?)?;
         }
-        Cmd::Stamp => println!("{}", stamp()),
+        Cmd::Stamp { patch } => println!("{}", stamp(&patch)?),
         Cmd::Verify { nso, from, limit } => {
             let mut failed = false;
             for p in nso {
