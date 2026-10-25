@@ -62,7 +62,9 @@ if [ "$SHADERS" = 1 ] || [ ! -f "$CACHE/index.tsv" ] || [ "$(cat "$CACHE/pipelin
 fi
 
 NX_MODULES_DIR="$PATCHED" IPHONEOS_DEPLOYMENT_TARGET=26.0 \
-  cargo "+$TOOLCHAIN" build --release -p nxhost --target aarch64-apple-ios --target-dir target/ios
+  cargo "+$TOOLCHAIN" rustc --release -p nxhost --bin nxhost \
+    --target aarch64-apple-ios --target-dir target/ios \
+    -- -C link-arg=-Wl,-no_compact_unwind
 
 rm -rf "$RES"
 mkdir -p "$RES/modules" "$RES/shaders"
