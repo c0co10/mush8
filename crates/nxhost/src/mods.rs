@@ -81,7 +81,10 @@ fn edit(data: &[u8], edits: &BTreeMap<String, Node>) -> Result<Vec<u8>> {
         let entries = nxfs::sarc::sarc(data)?;
         let mut contents: Vec<Vec<u8>> = entries.iter().map(|e| e.data.to_vec()).collect();
         for (key, node) in edits {
-            let i = entries.iter().position(|e| e.is(key)).with_context(|| format!("the archive has no {key}"))?;
+            let Some(i) = entries.iter().position(|e| e.is(key)) else {
+                eprintln!("[mods] skipped {key}: the archive has no such file");
+                continue;
+            };
             contents[i] = match node {
                 Node::File(p) => std::fs::read(p)?,
                 Node::Archive(inner) => edit(&contents[i], inner).with_context(|| key.clone())?,
@@ -95,7 +98,10 @@ fn edit(data: &[u8], edits: &BTreeMap<String, Node>) -> Result<Vec<u8>> {
         for (key, node) in edits {
             let Node::File(p) = node else { bail!("{key}: a texture must be a .png file") };
             let stem = key.strip_suffix(".png").or_else(|| key.strip_suffix(".PNG")).with_context(|| format!("{key}: a texture must be a .png file"))?;
-            let t = textures.iter().find(|t| t.name == stem || t.name.split('^').next() == Some(stem)).with_context(|| format!("the texture pack has no {stem}"))?;
+            let Some(t) = textures.iter().find(|t| t.name == stem || t.name.split('^').next() == Some(stem)) else {
+                eprintln!("[mods] skipped {key}: the texture pack has no {stem}");
+                continue;
+            };
             let (rgba, w, h) = png(p).with_context(|| key.clone())?;
             t.write(&mut out, &rgba, w, h)?;
         }
@@ -107,7 +113,9 @@ fn edit(data: &[u8], edits: &BTreeMap<String, Node>) -> Result<Vec<u8>> {
             let Node::File(p) = node else { bail!("{key}: a text must be a .txt file") };
             let label = key.strip_suffix(".txt").with_context(|| format!("{key}: a text must be a .txt file"))?;
             let text = std::fs::read_to_string(p)?;
-            m.set_text(label, text.trim_end_matches(['\r', '\n']))?;
+            if let Err(e) = m.set_text(label, text.trim_end_matches(['\r', '\n'])) {
+                eprintln!("[mods] skipped {key}: {e}");
+            }
         }
         return Ok(m.build());
     }

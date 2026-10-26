@@ -65,7 +65,7 @@ struct Mod: Identifiable {
 
     var summary: String {
         var parts: [String] = []
-        if romfs { parts.append("game files") }
+        if romfs { parts.append("replaces game files") }
         if !patches.isEmpty { parts.append(patches.count == 1 ? "1 code patch" : "\(patches.count) code patches") }
         if replacedModules { parts.append("replaced code modules are not supported") }
         return parts.isEmpty ? "no code patches in exefs" : parts.joined(separator: ", ")
