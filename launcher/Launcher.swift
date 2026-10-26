@@ -3,6 +3,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SystemConfiguration
 
 func nspKind(_ url: URL) -> String? {
     guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
@@ -83,6 +84,7 @@ final class Settings: ObservableObject {
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var phonePads = true
+    @Published var browserPads = false
     @Published var handheld = false
     @Published var uhd = false
     @Published var split60 = true
@@ -113,6 +115,7 @@ final class Settings: ObservableObject {
         backgroundCompile = j["background_compile"] as? Bool ?? true
         motion = j["motion_controls"] as? Bool ?? false
         phonePads = j["phone_pads"] as? Bool ?? true
+        browserPads = j["browser_pads"] as? Bool ?? false
         handheld = j["handheld"] as? Bool ?? false
         uhd = j["uhd"] as? Bool ?? false
         split60 = j["split60"] as? Bool ?? true
@@ -128,7 +131,7 @@ final class Settings: ObservableObject {
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
             "prewarm_pipelines": prewarm, "rumble": rumble, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
-            "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads,
+            "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads, "browser_pads": browserPads,
             "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
         ]
         try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
@@ -157,6 +160,7 @@ final class Settings: ObservableObject {
         if !backgroundCompile { env["NX_SYNC_SHADERS"] = "1" }
         env["NX_MOTION"] = motion ? "1" : "0"
         env["NX_PHONE_PADS"] = phonePads ? "1" : "0"
+        if phonePads && browserPads { env["NX_BROWSER_PADS"] = "1" }
         if handheld { env["NX_HANDHELD"] = "1" } else if uhd { env["NX_4K"] = "1" }
         if split60 { env["NX_SPLIT60"] = "1" }
         if fillScreen { env["NX_ASPECT"] = "auto" }
@@ -303,18 +307,41 @@ func systemAvailableMemory() -> UInt64 {
 
 func bytes(_ n: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .memory) }
 
+func lanIP() -> String? {
+    let fd = socket(AF_INET, SOCK_DGRAM, 0)
+    guard fd >= 0 else { return nil }
+    defer { close(fd) }
+    var dst = sockaddr_in()
+    dst.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    dst.sin_family = sa_family_t(AF_INET)
+    dst.sin_port = in_port_t(9).bigEndian
+    inet_pton(AF_INET, "192.0.2.1", &dst.sin_addr)
+    var local = sockaddr_in()
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let connected = withUnsafePointer(to: &dst) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    let named = withUnsafeMutablePointer(to: &local) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+    guard connected == 0, named == 0 else { return nil }
+    return String(cString: inet_ntoa(local.sin_addr))
+}
+
 final class SystemInfo: ObservableObject {
     @Published var available: UInt64 = availableMemory()
     @Published var nets: [NetInterface] = interfaces()
+    @Published var lan: String? = lanIP()
     private var timer: Timer?
 
     init() {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.available = availableMemory()
             self?.nets = interfaces()
+            self?.lan = lanIP()
         }
     }
 }
+
+let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:8088"
 
 func launch(_ s: Settings) -> String {
     FileManager.default.changeCurrentDirectoryPath(s.folder)
@@ -340,6 +367,7 @@ struct LauncherView: View {
     @StateObject private var prep = Preparer()
     @State private var launchError: String?
     @State private var tick = 0
+    @State private var copied: String?
 
     var body: some View {
         let list = checks(s)
@@ -467,12 +495,41 @@ struct LauncherView: View {
                 labeled("Spatial audio", "Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
             }
             Toggle(isOn: $s.phonePads) { labeled("iPhone controllers", "iPhones on this network join as players with Mush8's \"Use as a controller\"") }
+            if s.phonePads {
+                Toggle(isOn: $s.browserPads) {
+                    labeled("Browser controllers", s.browserPads ? "Phones open an address below in their browser on the same Wi-Fi and join as players, no app needed. The name stays the same, the IP can change" : "Any phone's browser can be a controller, no app needed")
+                }
+                if s.browserPads {
+                    addressRow("Mac's address", phonePadHost)
+                    addressRow("Or by IP", sys.lan.map { "http://\($0):8088" })
+                }
+            }
         }
     }
 
     var systemSection: some View {
         Section {
             row("Memory available", bytes(sys.available), warn: sys.available < 4 << 30 ? "4 GB of free RAM is recommended" : nil)
+        }
+    }
+
+    func addressRow(_ label: String, _ value: String?) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value ?? "no network").foregroundStyle(.secondary).monospacedDigit().textSelection(.enabled)
+            if let v = value {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(v, forType: .string)
+                    copied = v
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { if copied == v { copied = nil } }
+                } label: {
+                    Image(systemName: copied == v ? "checkmark" : "doc.on.doc").frame(width: 16)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy")
+            }
         }
     }
 

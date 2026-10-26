@@ -81,6 +81,12 @@ An iPhone can be a controller too : open Mush8 on it and tap "Use as a controlle
 
 On macOS, if your controller or a part of it (for example rumble) does not work, set "Gamepad driver" to SDL in the launcher
 
+Any phone's browser can be a controller too, no app needed (Android included) : turn "Browser controllers" on in the Mac launcher (it is off by default) and open one of the two addresses shown there on the phone (same Wi-Fi). Each phone joins as the next player. Hold the phone sideways and pick a layout at the top :
+- Normal : every button, for the menus
+- Drive : steering, item, drift and a small A for the start, made for the game's auto-accelerate. The stick stays in place (Fixed) or appears under your thumb (Floating)
+
+Add the page to the home screen (Share → Add to Home Screen) to get rid of the address bar
+
 ## Limitations
 - free Apple IDs and the `.ipa` (AltStore / SideStore) don't get the extended virtual addressing entitlement, so the game runs with a smaller 5 GB memory layout there (a paid account gets the full one)
 - Nintendo's online play is gone, use Online (lan-play) instead
