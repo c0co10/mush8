@@ -1,3 +1,5 @@
+// Mush8 - bntx.rs
+// Constantin Clerc (c22dev) - 0.1
 use anyhow::{Context, Result, bail, ensure};
 
 const RGBA8_UNORM: u32 = 0x0B01;

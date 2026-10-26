@@ -1,3 +1,5 @@
+// Mush8 - ips.rs
+// Constantin Clerc (c22dev) - 0.1
 use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
 

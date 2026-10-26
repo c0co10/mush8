@@ -1,3 +1,5 @@
+// Mush8 - mods.rs
+// Constantin Clerc (c22dev) - 0.1
 use anyhow::{Context, Result, bail};
 use nxfs::storage::{DynStorage, HostFile, Mem};
 use std::collections::{BTreeMap, HashMap};

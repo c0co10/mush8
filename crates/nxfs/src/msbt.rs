@@ -1,3 +1,5 @@
+// Mush8 - msbt.rs
+// Constantin Clerc (c22dev) - 0.1
 use anyhow::{Context, Result, ensure};
 
 pub struct Msbt {
