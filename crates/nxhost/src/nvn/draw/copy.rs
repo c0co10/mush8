@@ -268,17 +268,17 @@ pub fn copy_to_buffer(cb: &gfx::CommandBuffer, src: &Texture, (layer, level): (u
     let image = row * h.div_ceil(bh as usize);
     let len = (image * d.max(1)) as u64;
     let heap = gfx::heap().filter(|hp| hp.gpu_addr(dst).is_some() && hp.gpu_addr(dst + len - 1).is_some()).ok_or("destination outside the GPU heap")?;
-    if let Some((chunk,off)) = heap.buffer_range(dst,len) {
+    if let Some((chunk, off)) = heap.buffer_range(dst, len) {
         return copy_into(cb, src, (layer, level), r, nvn_format, &chunk.buffer.0, off);
     }
-    let temp = gfx::gpu().device.0.newBufferWithLength_options(len as usize,MTLResourceOptions::StorageModeShared).ok_or("texture readback staging buffer")?;
-    copy_into(cb,src,(layer,level),r,nvn_format,&temp,0)?;
+    let temp = gfx::gpu().device.0.newBufferWithLength_options(len as usize, MTLResourceOptions::StorageModeShared).ok_or("texture readback staging buffer")?;
+    copy_into(cb, src, (layer, level), r, nvn_format, &temp, 0)?;
     let enc = cb.blitCommandEncoder().ok_or("no readback split encoder")?;
     let mut copied = 0;
     while copied < len {
-        let (chunk,off) = heap.buffer_range(dst+copied,1).unwrap();
-        let n = (chunk.size-off as u64).min(len-copied);
-        unsafe { enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&temp,copied as usize,&chunk.buffer.0,off,n as usize); }
+        let (chunk, off) = heap.buffer_range(dst + copied, 1).ok_or("readback outside the GPU heap")?;
+        let n = (chunk.size - off as u64).min(len - copied);
+        unsafe { enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&temp, copied as usize, &chunk.buffer.0, off, n as usize) };
         copied += n;
     }
     enc.endEncoding();

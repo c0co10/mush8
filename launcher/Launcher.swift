@@ -187,7 +187,7 @@ func checks(_ s: Settings) -> [Check] {
     let fm = FileManager.default
     let f = s.folderURL
     let has = { (p: String) in fm.fileExists(atPath: f.appendingPathComponent(p).path) }
-    let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/index.tsv").path
+    let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/heap-segments-v2/index.tsv").path
     let shaders = (try? fm.attributesOfItem(atPath: shaderIndex)[.size] as? Int) ?? nil
     return [
         Check(id: "Base Game", ok: has(s.base), detail: has(s.base) ? s.base : "not found"),
@@ -196,7 +196,7 @@ func checks(_ s: Settings) -> [Check] {
         Check(id: "Game code for this Mac", ok: gameCodeReady(in: f) && preparedSource(in: f) == updateSource(s),
               detail: preparedVersion(in: f).map { "work/v-upd/patched (\($0))" } ?? "work/v-upd/patched"),
         Check(id: "Precompiled shaders", ok: (shaders ?? 0) > 0,
-              detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex", optional: shaders == 0),
+              detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex/heap-segments-v2", optional: shaders == 0),
         Check(id: "Console Keys", ok: has(s.keys), detail: has(s.keys) ? s.keys : "not found"),
         Check(id: "Firmware", ok: has("Firmware"), detail: has("Firmware") ? "Firmware/" : "not found"),
     ]
