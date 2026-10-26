@@ -106,6 +106,8 @@ mods/
 
 `exefs` holds code patches, as `.ips` or `.pchtxt` files. Mush8 applies them when you Prepare, so Prepare again after you change them. A code patch works only for one game update: Mush8 skips patches that are not for the update you use (3.0.5 or 4.0.1). Mush8 does not load replacement code modules (`main`, `subsdk0`...)
 
+If a code patch changes the same code as one of Mush8's own patches, the mod wins for the menus (main menu, 5-8 players row, ghost menu, ghost upload popup) and 60 fps split screen. Patches that change Mush8's 4K or Fill screen code are refused, turn the mod off to Prepare
+
 ### Edit files inside archives
 Some mods change only a part of a large game archive, for example one character icon in `UI/cmn/menu.sarc`. Make a folder with the name of the archive, and put the changed part inside it. Mush8 then changes only that part, so many mods can edit the same archive. These archives can be edited:
 - `.sarc` and `.szs` archives: a file or folder inside them replaces or edits the inner file with the same name
