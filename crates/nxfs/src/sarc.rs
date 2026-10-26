@@ -135,7 +135,18 @@ pub fn yaz0_compress(data: &[u8], tail: [u8; 8]) -> Vec<u8> {
 
 pub struct Entry<'a> {
     pub name: String,
+    pub hash: u32,
     pub data: &'a [u8],
+}
+
+impl Entry<'_> {
+    pub fn is(&self, path: &str) -> bool {
+        self.name.eq_ignore_ascii_case(path) || self.hash == name_hash(path)
+    }
+}
+
+pub fn name_hash(name: &str) -> u32 {
+    name.bytes().fold(0u32, |h, c| h.wrapping_mul(0x65).wrapping_add(c as u32))
 }
 
 struct Header {
@@ -191,7 +202,7 @@ pub fn sarc(data: &[u8]) -> Result<Vec<Entry<'_>>> {
             format!("{:08x}", h.u32(data, n))
         };
         ensure!(h.data_off + end <= data.len() && start <= end, "SARC entry out of range");
-        out.push(Entry { name, data: &data[h.data_off + start..h.data_off + end] });
+        out.push(Entry { name, hash: h.u32(data, n), data: &data[h.data_off + start..h.data_off + end] });
     }
     Ok(out)
 }
@@ -219,6 +230,11 @@ pub fn rebuild(data: &[u8], contents: &[&[u8]]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_hash_matches_the_game() {
+        assert_eq!(name_hash("timg/__Combined.bntx"), 0xc352_5d09);
+    }
 
     #[test]
     fn yaz0_literals_and_backrefs() {

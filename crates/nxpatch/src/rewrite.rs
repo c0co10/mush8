@@ -39,6 +39,35 @@ struct Game {
     aspect_stores: &'static [u64],
 }
 
+pub struct PatchGroup {
+    pub module_id: &'static str,
+    pub name: &'static str,
+    pub optional: bool,
+    pub sites: &'static [u64],
+}
+
+pub const PATCH_GROUPS: &[PatchGroup] = &[
+    PatchGroup { module_id: MK8DX_401, name: "main menu", optional: true, sites: &[0x4d8a04, 0x4d8af8, 0x4d8b08, 0x4d8bb4, 0x4da738, 0x3fc4a8] },
+    PatchGroup { module_id: MK8DX_401, name: "5-8 players row", optional: true, sites: &[0x438f24, 0x439600, 0xb52a74] },
+    PatchGroup { module_id: MK8DX_401, name: "ghost menu", optional: true, sites: &[0x4a3214, 0x4a32d8, 0x4a493c] },
+    PatchGroup { module_id: MK8DX_401, name: "ghost upload popup", optional: true, sites: &[0x546a80] },
+    PatchGroup { module_id: MK8DX_401, name: "60 fps split screen", optional: true, sites: &[0xafecc8] },
+    PatchGroup { module_id: MK8DX_401, name: "4K", optional: false, sites: &[0x87de00, 0x3c7354, 0x3d6820, 0x7e342c, 0x7e3390] },
+    PatchGroup { module_id: MK8DX_305, name: "main menu", optional: true, sites: &[0x4d54bc, 0x4d55a4, 0x4d55b4, 0x4d5660, 0x4d70fc, 0x3fa344] },
+    PatchGroup { module_id: MK8DX_305, name: "ghost menu", optional: true, sites: &[0x49fea8, 0x49ff6c, 0x4a15d0] },
+    PatchGroup { module_id: MK8DX_305, name: "ghost upload popup", optional: true, sites: &[0x543254] },
+    PatchGroup { module_id: MK8DX_305, name: "60 fps split screen", optional: true, sites: &[0xafa2a8] },
+    PatchGroup { module_id: MK8DX_305, name: "4K", optional: false, sites: &[0x88a514, 0x3c51e8, 0x3d46bc, 0x7f01f0, 0x7f0154] },
+];
+
+pub fn group_of(module_id: &str, site: u64) -> Option<&'static PatchGroup> {
+    PATCH_GROUPS.iter().find(|g| g.module_id == module_id && g.sites.contains(&site))
+}
+
+pub fn aspect_stores(module_id: &str) -> &'static [u64] {
+    GAMES.iter().find(|g| g.module_id == module_id).map_or(&[], |g| g.aspect_stores)
+}
+
 const GAMES: &[Game] = &[
     Game { module_id: MK8DX_401, keypage: 0x1368000, aspect_stores: &[0x3ccab8, 0x3cd25c, 0x3cd318] },
     Game { module_id: MK8DX_305, keypage: 0x1364000, aspect_stores: &[0x3ca958, 0x3cb0fc, 0x3cb1b8] },
@@ -499,11 +528,15 @@ impl Scratch {
 }
 
 pub fn rewrite(nso: &nxfs::nso::Nso) -> Result<Output> {
+    rewrite_skipping(nso, &[])
+}
+
+pub fn rewrite_skipping(nso: &nxfs::nso::Nso, skip: &[u64]) -> Result<Output> {
     let text = nso.text_bytes();
     ensure!(nso.text.mem_offset == 0, "text must start at 0");
     let mut words: Vec<u32> = text.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     let module_id = hex::encode(&nso.module_id[..20]);
-    for p in GAME_PATCHES.iter().filter(|p| p.module_id == module_id) {
+    for p in GAME_PATCHES.iter().filter(|p| p.module_id == module_id && !skip.contains(&p.site)) {
         let w = &mut words[p.site as usize / 4..][..p.from.len()];
         ensure!(w == p.from, "game patch at {:#x}: code differs from the expected original", p.site);
         w.copy_from_slice(p.to);
@@ -784,6 +817,18 @@ fn emit_jump_table(cx: &Ctx, e: &mut Emitter, sc: &Scratch, jt: &JumpTable, keyp
 mod tests {
     use super::*;
     use unicorn_engine::{Arch, Mode, Prot, RegisterARM64 as R, Unicorn};
+
+    #[test]
+    fn every_game_patch_has_a_group() {
+        for p in GAME_PATCHES {
+            assert!(group_of(p.module_id, p.site).is_some(), "game patch at {:#x} has no group", p.site);
+        }
+        for g in PATCH_GROUPS {
+            for &s in g.sites {
+                assert!(GAME_PATCHES.iter().any(|p| p.module_id == g.module_id && p.site == s), "{} lists {s:#x}, which is not a game patch", g.name);
+            }
+        }
+    }
 
     #[test]
     fn aspect_scale_keeps_registers() {

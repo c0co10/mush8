@@ -364,8 +364,8 @@ impl Replay<'_> {
             (Some((t, addr)), conv) => {
                 let size = index_size(t);
                 let heap = self.heap;
-                let range = heap.and_then(|h|h.buffer_range(addr,size*d.count as u64));
-                if let Some((chunk,off)) = range.filter(|_|conv.is_none() && t!=0 && addr%size==0) {
+                let range = heap.and_then(|h| h.buffer_range(addr, size * d.count as u64));
+                if let Some((chunk, off)) = range.filter(|_| conv.is_none() && t != 0 && addr % size == 0) {
                     let itype = if t == 1 { MTLIndexType::UInt16 } else { MTLIndexType::UInt32 };
                     return Ok(Prim::Indexed { ty, itype, buffer: chunk.buffer.clone(), offset: off, count: d.count as usize, base_vertex: d.base_vertex });
                 }

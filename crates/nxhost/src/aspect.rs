@@ -389,8 +389,10 @@ pub fn romfs(storage: DynStorage) -> Result<DynStorage> {
     let results = parallel(&jobs, |(i, _, name, szs)| patch_layouts(name, szs, plan).with_context(|| format!("{} {name}", archives[*i].0)));
     let mut patched: Vec<Vec<(Option<usize>, Vec<u8>)>> = archives.iter().map(|_| Vec::new()).collect();
     for (&(i, k, _, _), r) in jobs.iter().zip(results) {
-        if let Some(new) = r? {
-            patched[i].push((k, new));
+        match r {
+            Ok(Some(new)) => patched[i].push((k, new)),
+            Ok(None) => {}
+            Err(e) => eprintln!("[aspect] {e:#}, left as is"),
         }
     }
     let mut replacements = Vec::new();

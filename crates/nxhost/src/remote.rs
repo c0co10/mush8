@@ -54,9 +54,12 @@ struct Phone {
     seen: Instant,
     player: Option<u8>,
     acked: Option<(Instant, u8)>,
+    web: bool,
+    id: u64,
 }
 
 static PHONES: Mutex<Vec<Phone>> = Mutex::new(Vec::new());
+static RETIRED: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
 
 pub fn enabled() -> bool {
     let default = cfg!(target_os = "macos");
@@ -84,7 +87,7 @@ pub fn host() {
                         Some(p) => (p.pad, p.seen) = (pad, now),
                         None => {
                             eprintln!("[phone] iPhone controller connected from {addr}");
-                            phones.push(Phone { addr, pad, seen: now, player: None, acked: None });
+                            phones.push(Phone { addr, pad, seen: now, player: None, acked: None, web: false, id: device_id(addr) });
                         }
                     }
                 }
@@ -92,11 +95,11 @@ pub fn host() {
             phones.retain(|p| {
                 let live = now.duration_since(p.seen) < TIMEOUT;
                 if !live {
-                    eprintln!("[phone] iPhone controller at {} disconnected", p.addr);
+                    eprintln!("[phone] {} controller at {} disconnected", if p.web { "browser" } else { "iPhone" }, p.addr);
                 }
                 live
             });
-            for p in phones.iter_mut() {
+            for p in phones.iter_mut().filter(|p| !p.web) {
                 let Some(player) = p.player else { continue };
                 if p.acked.is_none_or(|(at, was)| was != player || now.duration_since(at) > Duration::from_millis(500)) {
                     let mut ack = [0u8; 5];
@@ -130,14 +133,58 @@ fn advertise() {
     }
 }
 
-pub fn connected() -> Vec<(SocketAddr, Pad)> {
-    PHONES.lock().unwrap().iter().map(|p| (p.addr, p.pad)).collect()
+pub fn connected() -> Vec<(u64, Pad)> {
+    PHONES.lock().unwrap().iter().map(|p| (p.id, p.pad)).collect()
 }
 
-pub fn set_player(addr: SocketAddr, player: u8) {
-    if let Some(p) = PHONES.lock().unwrap().iter_mut().find(|p| p.addr == addr) {
+pub fn set_player(device: u64, player: u8) {
+    for p in PHONES.lock().unwrap().iter_mut().filter(|p| p.id == device) {
         p.player = Some(player);
     }
+}
+
+pub fn device_id(addr: SocketAddr) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    addr.ip().hash(&mut h);
+    h.finish()
+}
+
+pub fn feed(addr: SocketAddr, pad: Pad) -> bool {
+    let id = device_id(addr);
+    let mut phones = PHONES.lock().unwrap();
+    let mut retired = RETIRED.lock().unwrap();
+    if retired.contains(&addr) {
+        return false;
+    }
+    if let Some(p) = phones.iter_mut().find(|p| p.addr == addr) {
+        (p.pad, p.seen) = (pad, Instant::now());
+    } else if let Some(p) = phones.iter_mut().find(|p| p.web && p.id == id) {
+        eprintln!("[phone] browser controller moved from {} to {addr}", p.addr);
+        retired.push(p.addr);
+        (p.addr, p.pad, p.seen) = (addr, pad, Instant::now());
+    } else {
+        eprintln!("[phone] browser controller connected from {addr}");
+        phones.push(Phone { addr, pad, seen: Instant::now(), player: None, acked: None, web: true, id });
+    }
+    true
+}
+
+pub fn player(addr: SocketAddr) -> Option<u8> {
+    PHONES.lock().unwrap().iter().find(|p| p.addr == addr).and_then(|p| p.player)
+}
+
+pub fn forget(addr: SocketAddr) {
+    let mut phones = PHONES.lock().unwrap();
+    if phones.iter().any(|p| p.addr == addr) {
+        eprintln!("[phone] browser controller at {addr} disconnected");
+        phones.retain(|p| p.addr != addr);
+    }
+    RETIRED.lock().unwrap().retain(|&a| a != addr);
+}
+
+pub fn is_web(device: u64) -> bool {
+    PHONES.lock().unwrap().iter().any(|p| p.id == device && p.web)
 }
 
 #[cfg(target_os = "ios")]
@@ -267,5 +314,32 @@ mod tests {
         assert_eq!((m.accel, m.gyro), (n.accel, n.gyro));
         assert!(Pad::decode(&Pad { motion: None, ..p }.encode()).unwrap().motion.is_none());
         assert!(Pad::decode(b"nope").is_none());
+    }
+
+    #[test]
+    fn one_entry_per_device() {
+        let pad = Pad::default();
+        let at = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let (safari, app, other) = (at("10.9.9.1:50001"), at("10.9.9.1:50002"), at("10.9.9.2:50003"));
+        let (phone, second) = (device_id(safari), device_id(other));
+        let entries = |d: u64| PHONES.lock().unwrap().iter().filter(|p| p.id == d).map(|p| p.addr).collect::<Vec<_>>();
+        assert_eq!(phone, device_id(app));
+        assert_ne!(phone, second);
+        assert!(feed(safari, pad) && feed(other, pad));
+        set_player(phone, 1);
+        assert!(feed(app, pad));
+        assert_eq!(entries(phone), vec![app]);
+        assert_eq!(player(app), Some(1));
+        assert!(!feed(safari, pad));
+        assert_eq!(entries(phone), vec![app]);
+        assert_eq!(entries(second), vec![other]);
+        assert!(is_web(phone) && is_web(second));
+        forget(safari);
+        assert!(feed(safari, pad));
+        assert_eq!(entries(phone), vec![safari]);
+        for a in [safari, app, other] {
+            forget(a);
+        }
+        assert!(entries(phone).is_empty() && entries(second).is_empty());
     }
 }

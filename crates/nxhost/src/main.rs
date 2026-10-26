@@ -14,6 +14,7 @@ mod ipc;
 mod kernel;
 mod loader;
 mod mem;
+mod mods;
 mod motion;
 mod movie;
 mod remote;
@@ -24,6 +25,7 @@ mod shm;
 mod stubs;
 mod nvn;
 mod svc;
+mod webpad;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -114,6 +116,8 @@ struct Args {
     firmware: PathBuf,
     #[arg(long)]
     dlc: Vec<PathBuf>,
+    #[arg(long = "mod")]
+    mods: Vec<PathBuf>,
     #[arg(long)]
     precompile: bool,
     #[arg(long)]
@@ -240,7 +244,7 @@ fn start(args: Args) -> Result<()> {
     let base = nxfs::Nsp::open(&args.base, &keys)?;
     let update = nxfs::Nsp::open(&update_file(&args.update), &keys)?;
     let version = game::identify(&update, &dir)?;
-    let romfs = program(&update)?.patched_romfs(program(&base)?)?;
+    let romfs = mods::romfs(program(&update)?.patched_romfs(program(&base)?)?, &args.mods)?;
     eprintln!("[host] RomFS: {:.2} GB", nxfs::storage::Storage::size(&*romfs) as f64 / 1e9);
     if args.movies {
         movie::webm::convert_all(romfs)?;
@@ -264,6 +268,9 @@ fn start(args: Args) -> Result<()> {
 
     if remote::enabled() {
         remote::host();
+        if webpad::enabled() {
+            webpad::host();
+        }
     }
     diag::install_handlers();
     guest::init_tsd();

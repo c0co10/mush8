@@ -3,6 +3,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SystemConfiguration
 
 func nspKind(_ url: URL) -> String? {
     guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
@@ -31,23 +32,70 @@ func tool(_ name: String, in folder: URL) -> URL {
     return folder.appendingPathComponent("target/release/\(name)")
 }
 
-private var nxpatchStamps: [URL: String] = [:]
+private var nxpatchStamps: [String: String] = [:]
 
-func gameCodeReady(in folder: URL) -> Bool {
+func gameCodeReady(in folder: URL, patches: [String]) -> Bool {
     let made = try? String(contentsOf: folder.appendingPathComponent("work/v-upd/patched/nxpatch.stamp"), encoding: .utf8)
     guard let made else { return false }
     let tool = tool("nxpatch", in: folder)
-    if nxpatchStamps[tool] == nil {
+    let args = ["stamp"] + patches.flatMap { ["--patch", $0] }
+    let modified = patches.map { p in
+        (try? FileManager.default.attributesOfItem(atPath: folder.appendingPathComponent(p).path)[.modificationDate] as? Date).map { "\($0.timeIntervalSince1970)" } ?? ""
+    }
+    let key = ([tool.path] + args + modified).joined(separator: "\n")
+    if nxpatchStamps[key] == nil {
         let p = Process()
         let pipe = Pipe()
         p.executableURL = tool
-        p.arguments = ["stamp"]
+        p.arguments = args
+        p.currentDirectoryURL = folder
         p.standardOutput = pipe
         guard (try? p.run()) != nil else { return true }
         p.waitUntilExit()
-        nxpatchStamps[tool] = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        nxpatchStamps[key] = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
-    return made.trimmingCharacters(in: .whitespacesAndNewlines) == nxpatchStamps[tool]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return made.trimmingCharacters(in: .whitespacesAndNewlines) == nxpatchStamps[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+struct Mod: Identifiable {
+    let name: String
+    let romfs: Bool
+    let patches: [String]
+    let replacedModules: Bool
+    var id: String { name }
+
+    var summary: String {
+        var parts: [String] = []
+        if romfs { parts.append("replaces game files") }
+        if !patches.isEmpty { parts.append(patches.count == 1 ? "1 code patch" : "\(patches.count) code patches") }
+        if replacedModules { parts.append("replaced code modules are not supported") }
+        return parts.isEmpty ? "no code patches in exefs" : parts.joined(separator: ", ")
+    }
+}
+
+func caselessChild(_ dir: URL, _ name: String) -> URL? {
+    let fm = FileManager.default
+    var isDir: ObjCBool = false
+    return (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?.first {
+        $0.lastPathComponent.caseInsensitiveCompare(name) == .orderedSame && fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
+    }
+}
+
+func installedMods(in folder: URL) -> [Mod] {
+    let root = folder.appendingPathComponent("mods")
+    guard let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles) else { return [] }
+    return dirs.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        .compactMap { dir -> Mod? in
+            let romfs = caselessChild(dir, "romfs")
+            let exefs = caselessChild(dir, "exefs")
+            guard romfs != nil || exefs != nil else { return nil }
+            let files = exefs.flatMap { try? FileManager.default.contentsOfDirectory(atPath: $0.path) }?.filter { !$0.hasPrefix(".") }.sorted() ?? []
+            let patches = files.filter { ["ips", "pchtxt"].contains(($0 as NSString).pathExtension.lowercased()) }
+            let name = dir.lastPathComponent
+            return Mod(name: name, romfs: romfs != nil, patches: patches.map { "mods/\(name)/\(exefs!.lastPathComponent)/\($0)" },
+                       replacedModules: files.contains { ["main", "sdk", "rtld"].contains($0) || $0.hasPrefix("subsdk") })
+        }
 }
 
 func updateSource(_ s: Settings) -> String {
@@ -83,12 +131,14 @@ final class Settings: ObservableObject {
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var phonePads = true
+    @Published var browserPads = false
     @Published var handheld = false
     @Published var uhd = false
     @Published var split60 = true
     @Published var fillScreen = true
     @Published var hudAtEdges = true
     @Published var hudScale = 1.0
+    @Published var disabledMods: [String] = []
     private var autosave: AnyCancellable?
 
     init() {
@@ -113,23 +163,30 @@ final class Settings: ObservableObject {
         backgroundCompile = j["background_compile"] as? Bool ?? true
         motion = j["motion_controls"] as? Bool ?? false
         phonePads = j["phone_pads"] as? Bool ?? true
+        browserPads = j["browser_pads"] as? Bool ?? false
         handheld = j["handheld"] as? Bool ?? false
         uhd = j["uhd"] as? Bool ?? false
         split60 = j["split60"] as? Bool ?? true
         fillScreen = j["aspect"] as? String != "16:9"
         hudAtEdges = j["hud"] as? String != "center"
         hudScale = j["hud_scale"] as? Double ?? 1.0
+        disabledMods = j["disabled_mods"] as? [String] ?? []
     }
 
     var folderURL: URL { URL(fileURLWithPath: folder) }
+
+    var enabledMods: [Mod] { installedMods(in: folderURL).filter { !disabledMods.contains($0.name) } }
+
+    var codePatches: [String] { enabledMods.flatMap(\.patches) }
 
     func save() {
         let j: [String: Any] = [
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
             "prewarm_pipelines": prewarm, "rumble": rumble, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
-            "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads,
+            "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads, "browser_pads": browserPads,
             "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
+            "disabled_mods": disabledMods,
         ]
         try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted, .sortedKeys]) {
@@ -157,6 +214,7 @@ final class Settings: ObservableObject {
         if !backgroundCompile { env["NX_SYNC_SHADERS"] = "1" }
         env["NX_MOTION"] = motion ? "1" : "0"
         env["NX_PHONE_PADS"] = phonePads ? "1" : "0"
+        if phonePads && browserPads { env["NX_BROWSER_PADS"] = "1" }
         if handheld { env["NX_HANDHELD"] = "1" } else if uhd { env["NX_4K"] = "1" }
         if split60 { env["NX_SPLIT60"] = "1" }
         if fillScreen { env["NX_ASPECT"] = "auto" }
@@ -168,6 +226,7 @@ final class Settings: ObservableObject {
     var arguments: [String] {
         var a = ["--keys", keys, "--base", base, "--update", update]
         if FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(dlc).path) { a += ["--dlc", dlc] }
+        for m in enabledMods where m.romfs { a += ["--mod", "mods/\(m.name)"] }
         return a
     }
 }
@@ -183,16 +242,19 @@ func checks(_ s: Settings) -> [Check] {
     let fm = FileManager.default
     let f = s.folderURL
     let has = { (p: String) in fm.fileExists(atPath: f.appendingPathComponent(p).path) }
-    let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/index.tsv").path
+    let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/heap-segments-v2/index.tsv").path
     let shaders = (try? fm.attributesOfItem(atPath: shaderIndex)[.size] as? Int) ?? nil
+    let mods = installedMods(in: f)
+    let on = mods.filter { !s.disabledMods.contains($0.name) }.count
     return [
         Check(id: "Base Game", ok: has(s.base), detail: has(s.base) ? s.base : "not found"),
         Check(id: "Update", ok: has(s.update), detail: has(s.update) ? s.update : "not found"),
         Check(id: "Booster Course Pass", ok: has(s.dlc), detail: has(s.dlc) ? s.dlc : "none", optional: true),
-        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f) && preparedSource(in: f) == updateSource(s),
+        Check(id: "Mods", ok: !mods.isEmpty, detail: mods.isEmpty ? "none" : "\(on) of \(mods.count) on", optional: true),
+        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f, patches: s.codePatches) && preparedSource(in: f) == updateSource(s),
               detail: preparedVersion(in: f).map { "work/v-upd/patched (\($0))" } ?? "work/v-upd/patched"),
         Check(id: "Precompiled shaders", ok: (shaders ?? 0) > 0,
-              detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex", optional: shaders == 0),
+              detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex/heap-segments-v2", optional: shaders == 0),
         Check(id: "Console Keys", ok: has(s.keys), detail: has(s.keys) ? s.keys : "not found"),
         Check(id: "Firmware", ok: has("Firmware"), detail: has("Firmware") ? "Firmware/" : "not found"),
     ]
@@ -213,8 +275,10 @@ final class Preparer: ObservableObject {
             try? updateSource(s).write(to: f.appendingPathComponent("work/v-upd/source"), atomically: true, encoding: .utf8)
             steps.append((tool("nxfs", in: f), ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]))
         }
-        if !gameCodeReady(in: f) {
-            steps.append((tool("nxpatch", in: f), ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]))
+        let patches = s.codePatches
+        if !gameCodeReady(in: f, patches: patches) {
+            steps.append((tool("nxpatch", in: f), ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]
+                + patches.flatMap { ["--patch", $0] }))
         }
         steps.append((tool("nxhost", in: f), s.arguments + ["--precompile"]))
         if s.pipelineArchive { setenv("NX_PIPELINE_ARCHIVE", "1", 1) } else { unsetenv("NX_PIPELINE_ARCHIVE") }
@@ -303,18 +367,41 @@ func systemAvailableMemory() -> UInt64 {
 
 func bytes(_ n: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .memory) }
 
+func lanIP() -> String? {
+    let fd = socket(AF_INET, SOCK_DGRAM, 0)
+    guard fd >= 0 else { return nil }
+    defer { close(fd) }
+    var dst = sockaddr_in()
+    dst.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    dst.sin_family = sa_family_t(AF_INET)
+    dst.sin_port = in_port_t(9).bigEndian
+    inet_pton(AF_INET, "192.0.2.1", &dst.sin_addr)
+    var local = sockaddr_in()
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let connected = withUnsafePointer(to: &dst) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    let named = withUnsafeMutablePointer(to: &local) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+    guard connected == 0, named == 0 else { return nil }
+    return String(cString: inet_ntoa(local.sin_addr))
+}
+
 final class SystemInfo: ObservableObject {
     @Published var available: UInt64 = availableMemory()
     @Published var nets: [NetInterface] = interfaces()
+    @Published var lan: String? = lanIP()
     private var timer: Timer?
 
     init() {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.available = availableMemory()
             self?.nets = interfaces()
+            self?.lan = lanIP()
         }
     }
 }
+
+let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:8088"
 
 func launch(_ s: Settings) -> String {
     FileManager.default.changeCurrentDirectoryPath(s.folder)
@@ -340,6 +427,8 @@ struct LauncherView: View {
     @StateObject private var prep = Preparer()
     @State private var launchError: String?
     @State private var tick = 0
+    @State private var copied: String?
+    @State private var showMods = false
 
     var body: some View {
         let list = checks(s)
@@ -375,6 +464,7 @@ struct LauncherView: View {
         }
         .padding(20)
         .frame(width: 520, height: 770)
+        .sheet(isPresented: $showMods) { ModsView(s: s) }
     }
 
     func dataSection(_ list: [Check]) -> some View {
@@ -392,6 +482,7 @@ struct LauncherView: View {
                     Text(c.id)
                     Spacer()
                     Text(c.detail).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    if c.id == "Mods" && c.ok { Button("Customize…") { showMods = true } }
                 }
             }
         }
@@ -467,12 +558,41 @@ struct LauncherView: View {
                 labeled("Spatial audio", "Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
             }
             Toggle(isOn: $s.phonePads) { labeled("iPhone controllers", "iPhones on this network join as players with Mush8's \"Use as a controller\"") }
+            if s.phonePads {
+                Toggle(isOn: $s.browserPads) {
+                    labeled("Browser controllers", s.browserPads ? "Phones open an address below in their browser on the same Wi-Fi and join as players, no app needed. The name stays the same, the IP can change" : "Any phone's browser can be a controller, no app needed")
+                }
+                if s.browserPads {
+                    addressRow("Mac's address", phonePadHost)
+                    addressRow("Or by IP", sys.lan.map { "http://\($0):8088" })
+                }
+            }
         }
     }
 
     var systemSection: some View {
         Section {
             row("Memory available", bytes(sys.available), warn: sys.available < 4 << 30 ? "4 GB of free RAM is recommended" : nil)
+        }
+    }
+
+    func addressRow(_ label: String, _ value: String?) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value ?? "no network").foregroundStyle(.secondary).monospacedDigit().textSelection(.enabled)
+            if let v = value {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(v, forType: .string)
+                    copied = v
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { if copied == v { copied = nil } }
+                } label: {
+                    Image(systemName: copied == v ? "checkmark" : "doc.on.doc").frame(width: 16)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy")
+            }
         }
     }
 
@@ -520,6 +640,45 @@ struct LauncherView: View {
         }
         s.save()
         launchError = launch(s)
+    }
+}
+
+struct ModsView: View {
+    @ObservedObject var s: Settings
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let mods = installedMods(in: s.folderURL)
+        VStack(spacing: 12) {
+            Form {
+                Section {
+                    ForEach(mods) { m in
+                        Toggle(isOn: Binding(get: { !s.disabledMods.contains(m.name) }, set: { on in
+                            s.disabledMods.removeAll { $0 == m.name }
+                            if !on { s.disabledMods.append(m.name) }
+                        })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(m.name)
+                                Text(m.summary).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Mods")
+                } footer: {
+                    Text("Mods apply from top to bottom, so a lower mod wins when two mods change the same file. Code patches apply the next time you Prepare.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Button("Show in Finder") { NSWorkspace.shared.open(s.folderURL.appendingPathComponent("mods")) }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 440, height: 420)
     }
 }
 
