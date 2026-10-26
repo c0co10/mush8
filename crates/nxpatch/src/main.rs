@@ -99,7 +99,11 @@ fn main() -> Result<()> {
             for p in nso {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
                 let mut m = nxfs::nso::Nso::parse(&std::fs::read(&p)?)?;
+                let id = hex::encode(&m.module_id[..20]);
                 for (i, c) in patches.iter().enumerate().filter(|(_, c)| c.matches(&m.module_id)) {
+                    if let Some(g) = rewrite::GAME_PATCHES.iter().find(|g| g.module_id == id && c.overlaps(g.site, 4 * g.from.len() as u64)) {
+                        anyhow::bail!("{} changes {name} at {:#x}, where Mush8 has its own patch: turn that mod off", c.source.display(), g.site);
+                    }
                     let bytes = c.apply(&mut m.image).with_context(|| name.clone())?;
                     println!("{name}: applied {} ({bytes} bytes)", c.source.display());
                     used[i] = true;

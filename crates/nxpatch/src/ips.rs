@@ -32,14 +32,17 @@ impl CodePatch {
         normalize(&hex::encode(module_id)) == self.build_id
     }
 
+    pub fn overlaps(&self, site: u64, len: u64) -> bool {
+        self.writes.iter().any(|(offset, data)| offset.checked_sub(NSO_HEADER).is_some_and(|at| at < site + len && site < at.saturating_add(data.len() as u64)))
+    }
+
     pub fn apply(&self, image: &mut [u8]) -> Result<usize> {
         let mut bytes = 0;
         for (offset, data) in &self.writes {
             let Some(at) = offset.checked_sub(NSO_HEADER) else { continue };
-            let at = at as usize;
-            let end = at + data.len();
-            ensure!(end <= image.len(), "{}: write at {:#x} is past the end of the module", self.source.display(), at);
-            image[at..end].copy_from_slice(data);
+            let end = at.checked_add(data.len() as u64).filter(|&e| e <= image.len() as u64);
+            let Some(end) = end else { bail!("{}: write at {:#x} is past the end of the module", self.source.display(), at) };
+            image[at as usize..end as usize].copy_from_slice(data);
             bytes += data.len();
         }
         Ok(bytes)
