@@ -284,6 +284,7 @@ pub fn pixel_format(nvn: u32) -> Option<MTLPixelFormat> {
         80 => P::BC6H_RGBUfloat,
         121..=134 => ASTC_LDR[(nvn - 121) as usize],
         135..=148 => ASTC_SRGB[(nvn - 135) as usize],
+        149 => P::B5G6R5Unorm,
         _ => return None,
     })
 }
