@@ -87,6 +87,43 @@ Any phone's browser can be a controller too, no app needed (Android included) : 
 
 Add the page to the home screen (Share → Add to Home Screen) to get rid of the address bar
 
+## Mods
+Mush8 loads mods from a `mods` folder in the same folder as your game files. This works on macOS only for now. Each mod is a folder inside `mods`, and it must contain a `romfs` folder, an `exefs` folder, or both. Mush8 ignores other folders. In the launcher, use Game data → Mods → Customize to turn each mod on or off
+
+```
+mods/
+  Peter Griffin/
+    romfs/
+      Driver/Ludwig.szs
+      UI/cmn/menu.sarc/mn_L_CharaIcon_00.szs/timg/__Combined.bntx/tc_Chara_Ludwig.png
+      UI/EUen/message.sarc/Common.msbt/1029.txt
+  Faster Items/
+    exefs/
+      158C0C7399AABD7BF83795C2EF3484C7.ips
+```
+
+`romfs` holds game files. A file replaces the game file at the same path. Mods apply from the top of the list to the bottom, so a lower mod wins when two mods replace the same file
+
+`exefs` holds code patches, as `.ips` or `.pchtxt` files. Mush8 applies them when you Prepare, so Prepare again after you change them. A code patch works only for one game update: Mush8 skips patches that are not for the update you use (3.0.5 or 4.0.1). Mush8 does not load replacement code modules (`main`, `subsdk0`...)
+
+### Edit files inside archives
+Some mods change only a part of a large game archive, for example one character icon in `UI/cmn/menu.sarc`. Make a folder with the name of the archive, and put the changed part inside it. Mush8 then changes only that part, so many mods can edit the same archive. These archives can be edited:
+- `.sarc` and `.szs` archives: a file or folder inside them replaces or edits the inner file with the same name
+- `.bntx` texture packs: `<texture name>.png` replaces that texture. The image must have the same size as the texture
+- `.msbt` text files: `<label>.txt` replaces the text with that label. For example, label `1029` in `Common.msbt` is Ludwig's name
+
+If a mod replaces a whole archive, edits from mods lower in the list apply on top of its copy
+
+### Convert a mod made for Atmosphère or an emulator
+1. Make a folder for the mod in `mods`, for example `mods/My Mod`
+2. Find the `romfs` folder in the download. It is often at `atmosphere/contents/0100152000022000/romfs`. Move it to `mods/My Mod/romfs`
+3. If the download has game folders such as `Driver`, `Kart` or `UI` at its top, with no `romfs` folder, move them into `mods/My Mod/romfs`
+4. Move the `.ips` and `.pchtxt` files to `mods/My Mod/exefs`. They are often in `exefs` or in `atmosphere/exefs_patches/<name>`
+5. If the readme tells you to put images into an archive with Switch Toolbox, make the archive path as folders instead. For example, "menu.sarc → mn_L_CharaIcon_00.szs → timg → __Combined.bntx: tc_Chara" becomes `romfs/UI/cmn/menu.sarc/mn_L_CharaIcon_00.szs/timg/__Combined.bntx/tc_Chara_Ludwig.png`
+6. If the readme tells you to change a name in `message.sarc`, write the new name in `romfs/UI/<language>/message.sarc/Common.msbt/<label>.txt`, for each language you play in
+
+Mods that change tracks, characters or items can break LAN and online play with players who do not have the same mods
+
 ## Limitations
 - free Apple IDs and the `.ipa` (AltStore / SideStore) don't get the extended virtual addressing entitlement, so the game runs with a smaller 5 GB memory layout there (a paid account gets the full one)
 - Nintendo's online play is gone, use Online (lan-play) instead
