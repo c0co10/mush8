@@ -37,12 +37,20 @@ pub fn wait_foreground() {
     });
 }
 
-pub(super) fn root_view() -> Option<Retained<UIView>> {
-    UI.with(|ui| ui.borrow().as_ref().and_then(|ui| ui.metal.superview()))
+pub(super) fn panel_hosts() -> Vec<(Retained<UIView>, bool)> {
+    UI.with(|ui| {
+        let ui = ui.borrow();
+        let Some(ui) = ui.as_ref() else { return Vec::new() };
+        let mut hosts = vec![(ui.root.clone(), false)];
+        hosts.extend(ui.metal.superview().filter(|v| !std::ptr::eq(&**v, &*ui.root)).map(|v| (v, true)));
+        hosts
+    })
 }
 
 pub(super) static CONTROLLER_MODE: AtomicBool = AtomicBool::new(false);
 pub(super) static TV: AtomicBool = AtomicBool::new(false);
+static WAITING: AtomicBool = AtomicBool::new(false);
+const TV_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 static WANT_TOUCH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn tv() -> bool {
@@ -71,6 +79,7 @@ struct Ui {
     metal: Retained<MetalView>,
     label: Retained<UILabel>,
     tv: Option<Retained<UIWindow>>,
+    accessory: Option<Retained<NSObject>>,
 }
 
 thread_local! {
@@ -203,6 +212,11 @@ fn text_label(mtm: MainThreadMarker, frame: CGRect, text: &str) -> Retained<UILa
 }
 
 fn connect(scene: &UIWindowScene, mtm: MainThreadMarker) {
+    if UI.with(|ui| ui.borrow().is_some()) {
+        eprintln!("[scene] Mush8 is already open in another window: closing this one");
+        UIApplication::sharedApplication(mtm).requestSceneSessionDestruction_options_errorHandler(&scene.session(), None, None);
+        return;
+    }
     let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
     let frame = UICoordinateSpace::bounds(&*window);
     let (metal, layer) = metal_view(scene, &window, mtm);
@@ -220,7 +234,8 @@ fn connect(scene: &UIWindowScene, mtm: MainThreadMarker) {
     vc.setView(Some(&root));
     window.setRootViewController(Some(&vc));
     window.makeKeyAndVisible();
-    UI.with(|ui| *ui.borrow_mut() = Some(Ui { window, root, metal, label, tv: None }));
+    let accessory = register_tv(&vc, mtm);
+    UI.with(|ui| *ui.borrow_mut() = Some(Ui { window, root, metal, label, tv: None, accessory }));
     if let Some(tv) = PENDING_TV.take() {
         attach_tv(&tv, mtm);
     }
@@ -230,6 +245,17 @@ fn connect(scene: &UIWindowScene, mtm: MainThreadMarker) {
     }
     let vc = Retained::as_ptr(&vc) as usize;
     dispatch2::DispatchQueue::main().exec_async(move || unsafe { mush8_show_launcher(vc as *mut _, play, controller) });
+}
+
+fn register_tv(vc: &ViewController, mtm: MainThreadMarker) -> Option<Retained<NSObject>> {
+    let class = AnyClass::get(c"UISceneAccessory")?;
+    let role = unsafe { UIWindowSceneSessionRoleExternalDisplayNonInteractive };
+    let config = UISceneConfiguration::initWithName_sessionRole(UISceneConfiguration::alloc(mtm), Some(&NSString::from_str("TV")), role);
+    unsafe { config.setDelegateClass(Some(SceneDelegate::class())) };
+    let accessory: Retained<NSObject> = unsafe { msg_send![class, externalNonInteractiveSceneAccessoryWithConfiguration: &*config] };
+    let registration: Retained<NSObject> = unsafe { msg_send![vc, registerSceneAccessory: &*accessory] };
+    eprintln!("[tv] registered for external displays");
+    Some(registration)
 }
 
 fn attach_tv(scene: &UIWindowScene, mtm: MainThreadMarker) {
@@ -244,7 +270,8 @@ fn attach_tv(scene: &UIWindowScene, mtm: MainThreadMarker) {
     vc.setView(Some(&host));
     window.setRootViewController(Some(&vc));
     window.setHidden(false);
-    eprintln!("[tv] external display connected: the game moves there, this phone becomes a controller");
+    let size = UICoordinateSpace::bounds(&*window).size;
+    eprintln!("[tv] external display connected ({}x{} @{}x): the game moves there, this phone becomes a controller", size.width, size.height, scene.screen().nativeScale());
     UI.with(|ui| {
         let mut ui = ui.borrow_mut();
         let Some(ui) = ui.as_mut() else { return };
@@ -253,6 +280,9 @@ fn attach_tv(scene: &UIWindowScene, mtm: MainThreadMarker) {
     });
     TV.store(true, Relaxed);
     refresh_touch();
+    if WAITING.swap(false, Relaxed) {
+        start();
+    }
 }
 
 fn detach_tv() {
@@ -292,6 +322,28 @@ extern "C" fn play() {
     if let Some(mtm) = MainThreadMarker::new() {
         UIApplication::sharedApplication(mtm).setIdleTimerDisabled(true);
     }
+    let available = UI.with(|ui| {
+        ui.borrow().as_ref().is_some_and(|ui| ui.tv.is_none() && ui.accessory.as_ref().is_some_and(|r| unsafe { msg_send![&**r, isAvailable] }))
+    });
+    if available {
+        eprintln!("[tv] an external display is coming: waiting for it before sizing the screen");
+        WAITING.store(true, Relaxed);
+        let fallback = dispatch2::DispatchTime::try_from(TV_WAIT).map(|t| {
+            dispatch2::DispatchQueue::main().after(t, || {
+                if WAITING.swap(false, Relaxed) {
+                    start();
+                }
+            })
+        });
+        if matches!(fallback, Ok(Ok(()))) {
+            return;
+        }
+        WAITING.store(false, Relaxed);
+    }
+    start();
+}
+
+fn start() {
     UI.with(|ui| {
         if let Some(ui) = ui.borrow().as_ref() {
             if let Some(tv) = &ui.tv {
