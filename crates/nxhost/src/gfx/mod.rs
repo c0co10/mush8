@@ -8,7 +8,7 @@ pub mod overlay;
 mod touch;
 
 #[cfg(target_os = "ios")]
-pub use ios::{run_app, set_touch_controls, tv, wait_foreground};
+pub use ios::{run_app, set_touch_controls, set_touch_idle, tv, wait_foreground};
 
 #[cfg(target_os = "macos")]
 pub fn set_touch_controls(_visible: bool) {}
@@ -17,6 +17,17 @@ pub fn set_touch_controls(_visible: bool) {}
 pub fn tv() -> bool {
     false
 }
+
+#[cfg(target_os = "macos")]
+pub fn touch_idle_secs() -> f32 {
+    0.0
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_touch_idle(_idle: bool) {}
+
+#[cfg(target_os = "ios")]
+pub use touch::idle_secs as touch_idle_secs;
 
 #[cfg(target_os = "macos")]
 pub fn wait_foreground() {}

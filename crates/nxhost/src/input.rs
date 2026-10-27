@@ -205,6 +205,22 @@ static SWAPS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec:
 pub fn swap(a: usize, b: usize) {
     SWAPS.lock().unwrap().push((a, b));
 }
+
+static EXTRA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn add_native() {
+    EXTRA.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn remove_native() {
+    EXTRA.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn extra_native() -> bool {
+    EXTRA.load(std::sync::atomic::Ordering::Relaxed) && !crate::gfx::tv()
+}
+
+const TOUCH_IDLE: f32 = 10.0;
 pub static FILL_TO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 const HOLD: std::time::Duration = std::time::Duration::from_secs(120);
@@ -240,6 +256,7 @@ pub struct Pads {
     extra: usize,
     fill: usize,
     touch_init: bool,
+    idle: bool,
     phone: Phone,
     #[cfg(target_os = "macos")]
     sdl_failed: crate::sdl::OpenOnce,
@@ -258,6 +275,7 @@ impl Pads {
             extra,
             fill: 0,
             touch_init: false,
+            idle: false,
             phone: Default::default(),
             #[cfg(target_os = "macos")]
             sdl_failed: Default::default(),
@@ -266,13 +284,22 @@ impl Pads {
 
     pub fn poll(&mut self) -> [Option<PadState>; MAX_PLAYERS] {
         let out = self.poll_pads();
-        let show = self.slots[self.home].is_none();
+        let show = self.touch.is_some() || self.native_home();
         if show != self.shown || !self.touch_init {
             self.touch_init = true;
             self.shown = show;
             crate::gfx::set_touch_controls(show);
         }
+        let idle = extra_native() && self.touch.is_some() && crate::gfx::touch_idle_secs() > TOUCH_IDLE;
+        if idle != self.idle {
+            self.idle = idle;
+            crate::gfx::set_touch_idle(idle);
+        }
         out
+    }
+
+    fn native_home(&self) -> bool {
+        self.slots[self.home].is_none()
     }
 
     fn open(&self) -> [bool; MAX_PLAYERS] {
@@ -386,7 +413,7 @@ impl Pads {
                     continue;
                 }
                 let mut open = self.open();
-                if cfg!(target_os = "ios") && self.slots[self.home].is_none() {
+                if self.native_home() {
                     open[self.home] = false;
                 }
                 let Some(i) = pick(open, &self.kept, Some(device)) else {
@@ -407,18 +434,22 @@ impl Pads {
                 self.home = 0;
                 changed = true;
             }
-            let tv = crate::gfx::tv();
-            if !tv && self.touch.take().is_some() {
+            if self.touch.is_some_and(|t| t != self.home) && self.slots[self.home].is_none() && self.phones[self.home].is_none() {
+                EXTRA.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            let own = crate::gfx::tv() || EXTRA.load(std::sync::atomic::Ordering::Relaxed);
+            if !own && self.touch.take().is_some() {
                 changed = true;
-            } else if tv && self.touch.is_none() {
+            } else if own && self.touch.is_none() {
                 self.touch = pick(self.open(), &self.kept, None);
                 if let Some(i) = self.touch {
-                    eprintln!("[input] touch controls are player {} (game on the TV)", i + 1);
+                    eprintln!("[input] {} player {}", if cfg!(target_os = "ios") { "touch controls are" } else { "keyboard is" }, i + 1);
                     self.kept[i] = None;
                     changed = true;
                 }
             }
-            let touch_slot = if tv { self.touch } else { self.slots[self.home].is_none().then_some(self.home) };
+            let touch_slot = if own { self.touch } else { self.native_home().then_some(self.home) };
+            let key_slot = touch_slot.or(Some(0));
             if changed {
                 crate::haptics::set_controllers(&self.slots);
             }
@@ -443,7 +474,7 @@ impl Pads {
                 if let Some(pad) = &remote {
                     acc.remote(pad);
                 }
-                if i == 0 {
+                if key_slot == Some(i) {
                     acc.keyboard();
                 }
                 if touch_slot == Some(i) {
@@ -479,7 +510,7 @@ impl Pads {
                     Some(c) => Some((Kind::Controller, c.name())),
                     None if remote.is_some() => Some(if self.phones[i].is_some_and(crate::remote::is_web) { (Kind::Browser, "Browser".into()) } else { (Kind::Iphone, "iPhone".into()) }),
                     None if touched && cfg!(target_os = "ios") => Some((Kind::Touch, "Touch controls".into())),
-                    None if i == 0 => Some((Kind::Keyboard, "Keyboard".into())),
+                    None if touched || key_slot == Some(i) => Some((Kind::Keyboard, "Keyboard".into())),
                     None if virtual_pad => Some((Kind::Virtual, "Virtual controller".into())),
                     None => None,
                 };

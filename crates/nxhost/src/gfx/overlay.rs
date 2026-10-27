@@ -25,10 +25,10 @@ const PLAYERS: usize = 4;
 
 const COLORS: [(f64, f64, f64); PLAYERS] = [(0.92, 0.25, 0.24), (0.20, 0.50, 0.96), (0.90, 0.66, 0.08), (0.20, 0.72, 0.34)];
 
-static TAPS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static TAPS: Mutex<Vec<(usize, bool)>> = Mutex::new(Vec::new());
 
-fn tap(i: usize) {
-    TAPS.lock().unwrap().push(i);
+fn tap((i, badge): (usize, bool)) {
+    TAPS.lock().unwrap().push((i, badge));
 }
 
 #[derive(Clone, PartialEq)]
@@ -36,10 +36,17 @@ struct Card {
     kind: Option<Kind>,
     name: String,
     selected: bool,
+    adds: bool,
+    removes: bool,
 }
 
-fn symbol(kind: Option<Kind>) -> &'static str {
-    match kind {
+const ADD: &str = if cfg!(target_os = "ios") { "Add touch controls" } else { "Add keyboard" };
+
+fn symbol(c: &Card) -> &'static str {
+    if c.adds {
+        return if cfg!(target_os = "ios") { "hand.tap.fill" } else { "keyboard" };
+    }
+    match c.kind {
         Some(Kind::Controller) => "gamecontroller.fill",
         Some(Kind::Keyboard) => "keyboard",
         Some(Kind::Touch) => "hand.tap.fill",
@@ -48,6 +55,34 @@ fn symbol(kind: Option<Kind>) -> &'static str {
         Some(Kind::Virtual) => "gamecontroller",
         None => "plus.circle.dashed",
     }
+}
+
+fn dashed(color: &objc2_core_graphics::CGColor) -> objc2::rc::Retained<objc2_quartz_core::CAShapeLayer> {
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_foundation::{NSArray, NSNumber};
+    let l = objc2_quartz_core::CAShapeLayer::new();
+    let rect = CGRect::new(CGPoint::new(1.0, 1.0), CGSize::new(CARD_W - 2.0, CARD_H - 2.0));
+    let path = unsafe { objc2_core_graphics::CGPath::with_rounded_rect(rect, 15.0, 15.0, std::ptr::null()) };
+    l.setPath(Some(&path));
+    l.setFillColor(None);
+    l.setStrokeColor(Some(color));
+    l.setLineWidth(1.5);
+    l.setLineDashPattern(Some(&NSArray::from_retained_slice(&[NSNumber::new_f64(6.0), NSNumber::new_f64(5.0)])));
+    l.setHidden(true);
+    l
+}
+
+const BADGE: f64 = 20.0;
+const BADGE_X: f64 = CARD_W / 2.0 - 36.0;
+const BADGE_Y: f64 = 46.0;
+const BADGE_REACH: f64 = 10.0;
+
+fn badge_symbol(c: &Card) -> &'static str {
+    if c.removes { "xmark.circle.fill" } else { "plus.circle.fill" }
+}
+
+fn adds_alpha(on: bool, adds: bool, (lit, add, off): (f64, f64, f64)) -> f64 {
+    if on { lit } else if adds { add } else { off }
 }
 
 #[derive(Clone, Copy)]
@@ -68,20 +103,25 @@ impl Layout {
         ((self.width - row) / 2.0 + i as f64 * (CARD_W + GAP), TOP)
     }
 
-    fn hit(&self, x: f64, y: f64) -> Option<usize> {
-        (0..self.count).find(|&i| {
+    fn hit(&self, x: f64, y: f64) -> Option<(usize, bool)> {
+        let i = (0..self.count).find(|&i| {
             let (cx, cy) = self.card(i);
             x >= cx && x < cx + CARD_W && y >= cy && y < cy + CARD_H
-        })
+        })?;
+        let (cx, cy) = self.card(i);
+        let (bx, by) = (x - cx - BADGE_X, y - cy - BADGE_Y);
+        let reach = -BADGE_REACH..BADGE + BADGE_REACH;
+        Some((i, reach.contains(&bx) && reach.contains(&by)))
     }
 }
 
 #[cfg(target_os = "macos")]
 mod ui {
-    use super::{CARD_H, CARD_W, COLORS, Card, ICON, Layout};
+    use super::{BADGE, BADGE_X, BADGE_Y, CARD_H, CARD_W, COLORS, Card, ICON, Layout, adds_alpha};
     use objc2::rc::Retained;
     use objc2::runtime::NSObject;
     use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2_quartz_core::CAShapeLayer;
     use objc2_app_kit::{
         NSBackingStoreType, NSBitmapImageFileType, NSBox, NSBoxType, NSColor, NSEvent, NSFont, NSFontWeightSemibold, NSImage, NSImageSymbolConfiguration, NSImageView,
         NSLineBreakMode, NSResponder, NSTextAlignment, NSTextField, NSTitlePosition, NSView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
@@ -104,6 +144,8 @@ mod ui {
         bg: Retained<NSBox>,
         pill: Retained<NSBox>,
         icon: Retained<NSImageView>,
+        badge: Retained<NSImageView>,
+        dash: Retained<CAShapeLayer>,
         name: Retained<NSTextField>,
     }
 
@@ -136,8 +178,8 @@ mod ui {
                 let p = self.convertPoint_fromView(event.locationInWindow(), None);
                 let h = self.bounds().size.height;
                 let hit = PANEL.with(|panel| panel.borrow().as_ref().and_then(|panel| panel.layout.hit(p.x, h - p.y)));
-                if let Some(i) = hit {
-                    super::tap(i);
+                if let Some(hit) = hit {
+                    super::tap(hit);
                 }
             }
         }
@@ -162,13 +204,14 @@ mod ui {
         let b = NSBox::initWithFrame(NSBox::alloc(mtm), frame);
         b.setBoxType(NSBoxType::Custom);
         b.setTitlePosition(NSTitlePosition::NoTitle);
+        b.setContentViewMargins(NSSize::new(0.0, 0.0));
         b.setCornerRadius(radius);
         b
     }
 
-    fn image(name: &str) -> Option<Retained<NSImage>> {
+    fn image(name: &str, size: f64) -> Option<Retained<NSImage>> {
         let img = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)?;
-        img.imageWithSymbolConfiguration(&NSImageSymbolConfiguration::configurationWithPointSize_weight(ICON, unsafe { NSFontWeightSemibold }))
+        img.imageWithSymbolConfiguration(&NSImageSymbolConfiguration::configurationWithPointSize_weight(size, unsafe { NSFontWeightSemibold }))
     }
 
     pub fn open(mtm: MainThreadMarker, count: usize) {
@@ -210,11 +253,22 @@ mod ui {
                 let icon = NSImageView::new(mtm);
                 icon.setFrame(at(0.0, 44.0, CARD_W, 64.0, CARD_H));
                 let name = label(mtm, "", 12.0, false, at(8.0, 116.0, CARD_W - 16.0, 18.0, CARD_H));
+                let badge = NSImageView::new(mtm);
+                badge.setFrame(at(BADGE_X, BADGE_Y, BADGE, BADGE, CARD_H));
+                badge.setImage(image("plus.circle.fill", 15.0).as_deref());
+                badge.setContentTintColor(Some(&NSColor::colorWithWhite_alpha(1.0, 0.55)));
+                badge.setHidden(true);
                 bg.addSubview(&pill);
                 bg.addSubview(&icon);
+                bg.addSubview(&badge);
                 bg.addSubview(&name);
+                bg.setWantsLayer(true);
+                let dash = super::dashed(&NSColor::colorWithWhite_alpha(1.0, 0.3).CGColor());
+                if let Some(layer) = bg.layer() {
+                    layer.addSublayer(&dash);
+                }
                 panel.addSubview(&bg);
-                CardView { bg, pill, icon, name }
+                CardView { bg, pill, icon, badge, dash, name }
             })
             .collect();
         let footer = label(mtm, "", 14.0, false, at(20.0, height - 36.0, width - 40.0, 20.0, height));
@@ -231,16 +285,21 @@ mod ui {
             for (i, (v, c)) in p.cards.iter().zip(&cards).enumerate() {
                 let color = rgb(COLORS[i]);
                 let on = c.kind.is_some();
-                v.bg.setFillColor(&NSColor::colorWithWhite_alpha(1.0, if on { 0.12 } else { 0.05 }));
+                let a = |levels| adds_alpha(on, c.adds, levels);
+                v.bg.setFillColor(&NSColor::colorWithWhite_alpha(1.0, a((0.12, 0.03, 0.05))));
                 let border = if c.selected { NSColor::whiteColor() } else if on { color.clone() } else { NSColor::colorWithWhite_alpha(1.0, 0.12) };
                 v.bg.setBorderColor(&border);
-                v.bg.setBorderWidth(if c.selected { 3.0 } else { 1.5 });
-                let pill = if on { color } else { NSColor::colorWithWhite_alpha(1.0, 0.2) };
+                v.bg.setBorderWidth(if c.adds { 0.0 } else if c.selected { 3.0 } else { 1.5 });
+                v.dash.setHidden(!c.adds);
+                v.badge.setHidden(!(c.adds || c.removes));
+                v.badge.setImage(image(super::badge_symbol(c), 15.0).as_deref());
+                v.badge.setContentTintColor(Some(&NSColor::colorWithWhite_alpha(1.0, if c.removes { 0.75 } else { 0.55 })));
+                let pill = if on { color } else { NSColor::colorWithWhite_alpha(1.0, a((1.0, 0.12, 0.2))) };
                 v.pill.setFillColor(&pill);
-                v.icon.setImage(image(super::symbol(c.kind)).as_deref());
-                v.icon.setContentTintColor(Some(&NSColor::colorWithWhite_alpha(1.0, if on { 1.0 } else { 0.3 })));
+                v.icon.setImage(image(super::symbol(c), ICON).as_deref());
+                v.icon.setContentTintColor(Some(&NSColor::colorWithWhite_alpha(1.0, a((1.0, 0.4, 0.3)))));
                 v.name.setStringValue(&NSString::from_str(&c.name));
-                v.name.setTextColor(Some(&NSColor::colorWithWhite_alpha(1.0, if on { 0.9 } else { 0.4 })));
+                v.name.setTextColor(Some(&NSColor::colorWithWhite_alpha(1.0, a((0.9, 0.5, 0.4)))));
             }
             p.hint.setStringValue(&NSString::from_str(&hint));
             p.footer.setStringValue(&NSString::from_str(&footer));
@@ -285,10 +344,11 @@ mod ui {
 
 #[cfg(target_os = "ios")]
 mod ui {
-    use super::{CARD_H, CARD_W, COLORS, Card, ICON, Layout};
+    use super::{BADGE, BADGE_X, BADGE_Y, CARD_H, CARD_W, COLORS, Card, ICON, Layout, adds_alpha};
     use objc2::rc::Retained;
     use objc2::runtime::NSObject;
     use objc2::{MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+    use objc2_quartz_core::CAShapeLayer;
     use objc2_core_foundation::{CGAffineTransform, CGPoint, CGRect, CGSize};
     use objc2_foundation::{NSSet, NSString};
     use objc2_ui_kit::{
@@ -305,6 +365,8 @@ mod ui {
         bg: Retained<UIView>,
         pill: Retained<UIView>,
         icon: Retained<UIImageView>,
+        badge: Retained<UIImageView>,
+        dash: Retained<CAShapeLayer>,
         name: Retained<UILabel>,
     }
 
@@ -320,7 +382,7 @@ mod ui {
         static LAYOUT: std::cell::Cell<Option<Layout>> = const { std::cell::Cell::new(None) };
     }
 
-    fn card_at(p: CGPoint) -> Option<usize> {
+    fn card_at(p: CGPoint) -> Option<(usize, bool)> {
         LAYOUT.with(|l| l.get()).and_then(|l| l.hit(p.x, p.y))
     }
 
@@ -348,8 +410,8 @@ mod ui {
             #[unsafe(method(touchesEnded:withEvent:))]
             fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
                 for t in touches.iter() {
-                    if let Some(i) = card_at(t.locationInView(Some(self))) {
-                        super::tap(i);
+                    if let Some(hit) = card_at(t.locationInView(Some(self))) {
+                        super::tap(hit);
                     }
                 }
             }
@@ -384,8 +446,8 @@ mod ui {
         v
     }
 
-    fn image(name: &str) -> Option<Retained<UIImage>> {
-        let config = UIImageSymbolConfiguration::configurationWithPointSize_weight(ICON, UIImageSymbolWeight::Semibold);
+    fn image(name: &str, size: f64) -> Option<Retained<UIImage>> {
+        let config = UIImageSymbolConfiguration::configurationWithPointSize_weight(size, UIImageSymbolWeight::Semibold);
         UIImage::systemImageNamed_withConfiguration(&NSString::from_str(name), Some(&config))
     }
 
@@ -422,11 +484,19 @@ mod ui {
                 icon.setFrame(rect(0.0, 44.0, CARD_W, 64.0));
                 icon.setContentMode(UIViewContentMode::Center);
                 let name = label(mtm, "", 12.0, false, rect(8.0, 116.0, CARD_W - 16.0, 18.0));
+                let badge = UIImageView::initWithImage(UIImageView::alloc(mtm), image("plus.circle.fill", 15.0).as_deref());
+                badge.setFrame(rect(BADGE_X, BADGE_Y, BADGE, BADGE));
+                badge.setContentMode(UIViewContentMode::Center);
+                unsafe { badge.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, 0.55))) };
+                badge.setHidden(true);
                 bg.addSubview(&pill);
                 bg.addSubview(&icon);
+                bg.addSubview(&badge);
                 bg.addSubview(&name);
+                let dash = super::dashed(&*unsafe { UIColor::colorWithWhite_alpha(1.0, 0.3).CGColor() });
+                bg.layer().addSublayer(&dash);
                 view.addSubview(&bg);
-                CardView { bg, pill, icon, name }
+                CardView { bg, pill, icon, badge, dash, name }
             })
             .collect();
         let footer = label(mtm, "", 14.0, false, rect(20.0, height - 36.0, width - 40.0, 20.0));
@@ -442,17 +512,22 @@ mod ui {
             for (i, (v, c)) in p.cards.iter().zip(&cards).enumerate() {
                 let color = rgb(COLORS[i]);
                 let on = c.kind.is_some();
-                v.bg.setBackgroundColor(Some(&UIColor::colorWithWhite_alpha(1.0, if on { 0.12 } else { 0.05 })));
+                let a = |levels| adds_alpha(on, c.adds, levels);
+                v.bg.setBackgroundColor(Some(&UIColor::colorWithWhite_alpha(1.0, a((0.12, 0.03, 0.05)))));
                 let layer = v.bg.layer();
                 let border = if c.selected { UIColor::whiteColor() } else if on { color.clone() } else { UIColor::colorWithWhite_alpha(1.0, 0.12) };
                 layer.setBorderColor(Some(&*unsafe { border.CGColor() }));
-                layer.setBorderWidth(if c.selected { 3.0 } else { 1.5 });
-                let pill = if on { color } else { UIColor::colorWithWhite_alpha(1.0, 0.2) };
+                layer.setBorderWidth(if c.adds { 0.0 } else if c.selected { 3.0 } else { 1.5 });
+                v.dash.setHidden(!c.adds);
+                v.badge.setHidden(!(c.adds || c.removes));
+                v.badge.setImage(image(super::badge_symbol(c), 15.0).as_deref());
+                unsafe { v.badge.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, if c.removes { 0.75 } else { 0.55 }))) };
+                let pill = if on { color } else { UIColor::colorWithWhite_alpha(1.0, a((1.0, 0.12, 0.2))) };
                 v.pill.setBackgroundColor(Some(&pill));
-                v.icon.setImage(image(super::symbol(c.kind)).as_deref());
-                unsafe { v.icon.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, if on { 1.0 } else { 0.3 }))) };
+                v.icon.setImage(image(super::symbol(c), ICON).as_deref());
+                unsafe { v.icon.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, a((1.0, 0.4, 0.3))))) };
                 v.name.setText(Some(&NSString::from_str(&c.name)));
-                unsafe { v.name.setTextColor(Some(&UIColor::colorWithWhite_alpha(1.0, if on { 0.9 } else { 0.4 }))) };
+                unsafe { v.name.setTextColor(Some(&UIColor::colorWithWhite_alpha(1.0, a((0.9, 0.5, 0.4))))) };
             }
             p.hint.setText(Some(&NSString::from_str(&hint)));
             p.footer.setText(Some(&NSString::from_str(&footer)));
@@ -488,7 +563,7 @@ const WIGGLE: Duration = Duration::from_millis(450);
 const SETTLE: Duration = Duration::from_millis(250);
 
 fn movable(k: Option<Kind>) -> bool {
-    matches!(k, Some(Kind::Controller | Kind::Touch | Kind::Iphone | Kind::Browser))
+    matches!(k, Some(Kind::Controller | Kind::Keyboard | Kind::Touch | Kind::Iphone | Kind::Browser))
 }
 
 fn swappable(kinds: &[Option<Kind>], a: usize, b: usize) -> bool {
@@ -528,6 +603,10 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
         let n = connected();
         let now = held();
         let pressed = |i: usize, mask: u64| now[i] & mask != 0 && prev[i] & mask == 0;
+        let native = kinds.iter().any(|k| matches!(k, Some(Kind::Touch | Kind::Keyboard)));
+        let add = (0..min.min(max)).find(|&j| kinds[j].is_none()).filter(|_| !native && n < min);
+        let extra = crate::input::extra_native();
+        let removes = |i: usize| extra && matches!(kinds[i], Some(Kind::Touch | Kind::Keyboard));
         let mut swaps = Vec::new();
         for i in 0..max {
             if now[i] & !prev[i] != 0 {
@@ -542,8 +621,18 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
                 }
             }
         }
-        for i in std::mem::take(&mut *TAPS.lock().unwrap()) {
+        for (i, badge) in std::mem::take(&mut *TAPS.lock().unwrap()) {
             wiggles[i] = Some(Instant::now());
+            if badge && removes(i) {
+                crate::input::remove_native();
+                selected = None;
+                continue;
+            }
+            if Some(i) == add {
+                crate::input::add_native();
+                selected = None;
+                continue;
+            }
             match selected.take() {
                 Some(s) if s != i => swaps.push((s, i)),
                 Some(_) => {}
@@ -560,8 +649,10 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
         let cards: Vec<Card> = (0..max)
             .map(|i| Card {
                 kind: kinds[i],
-                name: names[i].as_ref().map_or("Empty".into(), |(_, name)| name.clone()),
+                name: names[i].as_ref().map_or(if add == Some(i) { ADD } else { "Empty" }.into(), |(_, name)| name.clone()),
                 selected: selected == Some(i),
+                adds: add == Some(i),
+                removes: removes(i),
             })
             .collect();
         let keyboard = kinds[0] == Some(Kind::Keyboard);

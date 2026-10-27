@@ -54,6 +54,10 @@ pub fn set_touch_controls(visible: bool) {
     dispatch2::DispatchQueue::main().exec_async(refresh_touch);
 }
 
+pub fn set_touch_idle(idle: bool) {
+    dispatch2::DispatchQueue::main().exec_async(move || super::touch::set_idle(idle));
+}
+
 fn refresh_touch() {
     let want = WANT_TOUCH.load(Relaxed);
     if !CONTROLLER_MODE.load(Relaxed) && want != 0 {

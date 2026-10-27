@@ -10,6 +10,35 @@ use objc2_ui_kit::{NSTextAlignment, UIColor, UIEvent, UIFont, UILabel, UIRespond
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::LazyLock;
+use std::time::Instant;
+
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+static LAST: AtomicU64 = AtomicU64::new(0);
+static IDLE: AtomicBool = AtomicBool::new(false);
+
+fn mark() {
+    LAST.store(START.elapsed().as_millis() as u64, Relaxed);
+}
+
+pub fn idle_secs() -> f32 {
+    (START.elapsed().as_millis() as u64).saturating_sub(LAST.load(Relaxed)) as f32 / 1000.0
+}
+
+pub fn set_idle(idle: bool) {
+    PAD.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(p) = p.as_mut() else { return };
+        if idle && p.shown {
+            IDLE.store(true, Relaxed);
+            hide(p);
+        } else if !idle && IDLE.swap(false, Relaxed) {
+            show_controls(p, true);
+            p.shown = true;
+        }
+    });
+}
 
 const BUTTONS: [(&str, u64); 8] = [("A", A), ("B", B), ("X", X), ("Y", Y), ("L", L), ("R", R), ("+", PLUS), ("−", MINUS)];
 const FILL: f64 = 0.35;
@@ -148,17 +177,28 @@ fn show_controls(p: &Pad, visible: bool) {
 }
 
 pub fn set_visible(visible: bool) {
+    IDLE.store(false, Relaxed);
+    if visible {
+        mark();
+    }
     PAD.with(|p| {
         let mut p = p.borrow_mut();
         let Some(p) = p.as_mut() else { return };
-        show_controls(p, visible);
-        p.shown = visible;
-        if !visible {
-            p.held.clear();
-            p.stick.touch = None;
-            publish(p);
+        if visible {
+            show_controls(p, true);
+            p.shown = true;
+        } else {
+            hide(p);
         }
     });
+}
+
+fn hide(p: &mut Pad) {
+    show_controls(p, false);
+    p.shown = false;
+    p.held.clear();
+    p.stick.touch = None;
+    publish(p);
 }
 
 fn layout() {
@@ -203,6 +243,11 @@ fn handle(view: &TouchView, touches: &NSSet<UITouch>, phase: Phase) {
     PAD.with(|p| {
         let mut p = p.borrow_mut();
         let Some(p) = p.as_mut() else { return };
+        mark();
+        if phase == Phase::Began && !p.shown && IDLE.swap(false, Relaxed) {
+            show_controls(p, true);
+            p.shown = true;
+        }
         let b = view.bounds().size;
         for t in touches.allObjects().iter() {
             let id = &*t as *const UITouch as usize;

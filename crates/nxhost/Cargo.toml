@@ -18,6 +18,7 @@ objc2-audio-toolbox = "0.3.2"
 objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media", "objc2-core-video"] }
 objc2-core-audio-types = "0.3.2"
 objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
 objc2-core-media = "0.3.2"
 objc2-core-video = "0.3.2"
 objc2-foundation = "0.3.2"
