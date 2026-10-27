@@ -401,7 +401,7 @@ final class SystemInfo: ObservableObject {
     }
 }
 
-let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:8088"
+let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:2904"
 
 func launch(_ s: Settings) -> String {
     FileManager.default.changeCurrentDirectoryPath(s.folder)
@@ -495,19 +495,64 @@ struct LauncherView: View {
         }
     }
 
-    var settingsSection: some View {
-        Section("Settings") {
+    var multiplayerNote: String? {
+        switch s.network {
+        case "lan": return "Switch and Mush8 players on the same network can join"
+        case "lanplay": return "Lan-Play.com clients on the same server can join"
+        case "wireless": return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        default: return nil
+        }
+    }
+
+    @ViewBuilder var settingsSection: some View {
+        Section {
+            Picker("Mode", selection: $s.network) {
+                Text("Off").tag("off")
+                Text("LAN").tag("lan")
+                Text("Online").tag("lanplay")
+                Text("Wireless (nearby)").tag("wireless")
+            }
+            switch s.network {
+            case "lan":
+                Picker("Network", selection: $s.lanInterface) {
+                    Text("Automatic").tag("")
+                    ForEach(sys.nets, id: \.self) { n in Text("\(n.name) · \(n.ip)").tag(n.name) }
+                }
+            case "lanplay":
+                TextField("Server", text: $s.lanPlayServer, prompt: Text("host:port"))
+            default:
+                EmptyView()
+            }
+        } header: {
+            Text("Multiplayer")
+        } footer: {
+            if let note = multiplayerNote { Text(note).font(.caption).foregroundStyle(.secondary) }
+        }
+        Section {
+            Toggle("Remote controllers", isOn: $s.phonePads)
+            if s.phonePads {
+                Toggle("Web controllers", isOn: $s.browserPads)
+                if s.browserPads {
+                    addressRow("Mac's address", phonePadHost)
+                    addressRow("Or by IP", sys.lan.map { "http://\($0):2904" })
+                }
+            }
+        } footer: {
+            Text(s.phonePads && s.browserPads
+                ? "After you press Play, other phones on the same Wi-Fi can open one of these addresses in their browser and join as players. The name stays the same, the IP can change"
+                : "Nearby iPhones can join as players with \"Use as a controller\"")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
             Picker("Console mode", selection: Binding(get: { s.handheld ? 2 : s.uhd ? 1 : 0 }, set: { s.handheld = $0 == 2; s.uhd = $0 == 1 })) {
                 Text("Docked (1080p)").tag(0)
                 Text("Docked (4K)").tag(1)
                 Text("Handheld (720p)").tag(2)
             }
             Toggle(isOn: $s.split60) { labeled("60 fps split screen", "3 or 4 players get every screen drawn each frame, needs a fast GPU") }
-            Picker(selection: $s.fillScreen) {
+            Picker("Screen", selection: $s.fillScreen) {
                 Text("16:9").tag(false)
                 Text("Fill screen").tag(true)
-            } label: {
-                labeled("Screen", "Fill screen widens the race to the whole display, menus and HUD keep their proportions")
             }
             if s.fillScreen {
                 Picker("HUD", selection: $s.hudAtEdges) {
@@ -520,53 +565,31 @@ struct LauncherView: View {
                 Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
                 Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
             }
-            Picker(selection: $s.network) {
-                Text("Off").tag("off")
-                Text("LAN").tag("lan")
-                Text("Online").tag("lanplay")
-                Text("Wireless (nearby)").tag("wireless")
-            } label: {
-                labeled("Multiplayer", s.network == "wireless" ? "Nearby Mush8 clients can join (keep Wi-Fi on)" : nil)
-            }
-            switch s.network {
-            case "lan":
-                Picker(selection: $s.lanInterface) {
-                    Text("Automatic").tag("")
-                    ForEach(sys.nets, id: \.self) { n in Text("\(n.name) · \(n.ip)").tag(n.name) }
-                } label: {
-                    labeled("Network", "Switch and Mush8 players on the same network can join")
-                }
-            case "lanplay":
-                TextField(text: $s.lanPlayServer, prompt: Text("host:port")) {
-                    labeled("Server", "Lan-Play.com clients on the same server can join")
-                }
-            default:
-                EmptyView()
-            }
+        } header: {
+            Text("Graphics")
+        } footer: {
+            Text("Handheld renders at 720p: lighter on the GPU and battery. Fill screen widens the race to the whole display")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
             Toggle("Pipeline archive", isOn: $s.pipelineArchive)
             Toggle("Prewarm pipelines", isOn: $s.prewarm)
-            Toggle(isOn: $s.backgroundCompile) { labeled("Background shader compiling", "Builds the game's graphics pipelines in the background at startup") }
+            Toggle("Background shader compiling", isOn: $s.backgroundCompile)
+        } footer: {
+            Text("Builds the game's graphics pipelines in the background at startup").font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
+            Toggle("Spatial audio", isOn: $s.spatial)
+            Toggle("Vibration", isOn: $s.rumble)
+            Toggle("Motion controls", isOn: $s.motion)
             Picker(selection: $s.padDriver) {
                 Text("Apple").tag("apple")
                 Text("SDL").tag("sdl")
             } label: {
                 labeled("Gamepad driver", "SDL supports more controllers, and rumble on more of them. Apple follows the button remapping in System Settings")
             }
-            Toggle("Vibration", isOn: $s.rumble)
-            Toggle("Motion controls", isOn: $s.motion)
-            Toggle(isOn: $s.spatial) {
-                labeled("Spatial audio", "Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
-            }
-            Toggle(isOn: $s.phonePads) { labeled("iPhone controllers", "iPhones on this network join as players with Mush8's \"Use as a controller\"") }
-            if s.phonePads {
-                Toggle(isOn: $s.browserPads) {
-                    labeled("Browser controllers", s.browserPads ? "Phones open an address below in their browser on the same Wi-Fi and join as players, no app needed. The name stays the same, the IP can change" : "Any phone's browser can be a controller, no app needed")
-                }
-                if s.browserPads {
-                    addressRow("Mac's address", phonePadHost)
-                    addressRow("Or by IP", sys.lan.map { "http://\($0):8088" })
-                }
-            }
+        } header: {
+            Text("Audio & controls")
         }
     }
 
