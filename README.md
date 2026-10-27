@@ -99,4 +99,11 @@ mods/
 - no amiibo (yet)
 - the two WebM videos (credits, Switch 2 dialog) play as a slideshow
 
+## Credits
+Thanks to everyone who contributed :
+- [codedpalette](https://github.com/codedpalette) : a bunch of fixes and improvements
+- [hchzr](https://github.com/hchzr) : 4K and 60 fps split screen
+- [lyccccy](https://github.com/lyccccy) : GPU heap split, so iPhones with less memory can render
+- [FritteHD](https://github.com/FritteHD) : browser phone pad
+
 Contributions are welcome !
