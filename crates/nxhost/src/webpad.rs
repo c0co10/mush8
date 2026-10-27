@@ -5,7 +5,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 8088;
+const PORT: u16 = 2904;
 const PAGE: &str = include_str!("webpad.html");
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const STATUS: Duration = Duration::from_millis(500);
