@@ -448,6 +448,15 @@ impl Pads {
                     changed = true;
                 }
             }
+            if let Some(t) = self.touch
+                && let Some(g) = (t + 1..MAX_PLAYERS).find(|&j| self.slots[j].is_some())
+            {
+                self.slots.swap(t, g);
+                self.touch = Some(g);
+                self.number(t);
+                eprintln!("[input] gamepad moves up to player {}, {} player {}", t + 1, if cfg!(target_os = "ios") { "touch controls are" } else { "keyboard is" }, g + 1);
+                changed = true;
+            }
             let touch_slot = if own { self.touch } else { self.native_home().then_some(self.home) };
             let key_slot = touch_slot.or(Some(0));
             if changed {

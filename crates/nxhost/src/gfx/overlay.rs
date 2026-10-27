@@ -572,6 +572,11 @@ fn swappable(kinds: &[Option<Kind>], a: usize, b: usize) -> bool {
     }
     let mut after: Vec<_> = kinds.iter().map(|&k| k.filter(|_| movable(k))).collect();
     after.swap(a, b);
+    let native = after.iter().position(|k| matches!(k, Some(Kind::Touch | Kind::Keyboard)));
+    let pad = after.iter().rposition(|k| *k == Some(Kind::Controller));
+    if native.zip(pad).is_some_and(|(n, p)| n < p) {
+        return false;
+    }
     after.iter().skip(1).skip_while(|k| k.is_some()).all(|k| k.is_none())
 }
 
@@ -683,5 +688,21 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
             on_main(|_| ui::close());
             return confirm.then_some(n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamepads_stay_ahead_of_keyboard_and_touch() {
+        let (pad, key, touch, phone) = (Some(Kind::Controller), Some(Kind::Keyboard), Some(Kind::Touch), Some(Kind::Iphone));
+        assert!(!swappable(&[pad, key, None, None], 0, 1));
+        assert!(!swappable(&[pad, touch, None, None], 0, 1));
+        assert!(swappable(&[key, phone, None, None], 0, 1));
+        assert!(swappable(&[pad, key, phone, None], 1, 2));
+        assert!(swappable(&[pad, pad, touch, None], 0, 1));
+        assert!(!swappable(&[pad, None, None, None], 0, 2));
     }
 }
