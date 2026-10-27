@@ -13,13 +13,20 @@
   <key>UILaunchScreen</key><dict><key>UIColorName</key><string></string></dict>
   <key>UIApplicationSceneManifest</key>
   <dict>
-    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UIApplicationSupportsMultipleScenes</key><true/>
     <key>UISceneConfigurations</key>
     <dict>
       <key>UIWindowSceneSessionRoleApplication</key>
       <array>
         <dict>
           <key>UISceneConfigurationName</key><string>Default</string>
+          <key>UISceneDelegateClassName</key><string>NXSceneDelegate</string>
+        </dict>
+      </array>
+      <key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key><string>TV</string>
           <key>UISceneDelegateClassName</key><string>NXSceneDelegate</string>
         </dict>
       </array>

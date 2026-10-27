@@ -223,7 +223,7 @@ fn handle(view: &TouchView, touches: &NSSet<UITouch>, phase: Phase) {
                         p.stick.origin = pt;
                         place(&p.stick.base, pt, p.stick.radius);
                         move_stick(&p.stick, pt);
-                    } else if !super::ios::CONTROLLER_MODE.load(Relaxed) {
+                    } else if !super::ios::CONTROLLER_MODE.load(Relaxed) && !super::ios::TV.load(Relaxed) {
                         let at = super::screen_point(pt.x, pt.y, b.width, b.height);
                         if super::on_screen(at) {
                             p.screen.insert(id);

@@ -8,10 +8,15 @@ pub mod overlay;
 mod touch;
 
 #[cfg(target_os = "ios")]
-pub use ios::{run_app, set_touch_controls, wait_foreground};
+pub use ios::{run_app, set_touch_controls, tv, wait_foreground};
 
 #[cfg(target_os = "macos")]
 pub fn set_touch_controls(_visible: bool) {}
+
+#[cfg(target_os = "macos")]
+pub fn tv() -> bool {
+    false
+}
 
 #[cfg(target_os = "macos")]
 pub fn wait_foreground() {}
