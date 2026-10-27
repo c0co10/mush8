@@ -378,7 +378,7 @@ mod ui {
     }
 
     thread_local! {
-        static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
+        static PANEL: RefCell<Vec<Panel>> = const { RefCell::new(Vec::new()) };
         static LAYOUT: std::cell::Cell<Option<Layout>> = const { std::cell::Cell::new(None) };
     }
 
@@ -451,64 +451,84 @@ mod ui {
         UIImage::systemImageNamed_withConfiguration(&NSString::from_str(name), Some(&config))
     }
 
+    const TV_SHARE: f64 = 0.5;
+
+    fn sharpen(view: &UIView, scale: f64) {
+        view.setContentScaleFactor(scale);
+        if let Some(sublayers) = unsafe { view.layer().sublayers() } {
+            for l in sublayers.iter().filter(|l| l.downcast_ref::<CAShapeLayer>().is_some()) {
+                l.setContentsScale(scale);
+            }
+        }
+        for v in view.subviews().iter() {
+            sharpen(&v, scale);
+        }
+    }
+
     fn rotation(a: f64) -> CGAffineTransform {
         CGAffineTransform { a: a.cos(), b: a.sin(), c: -a.sin(), d: a.cos(), tx: 0.0, ty: 0.0 }
     }
 
     pub fn open(mtm: MainThreadMarker, count: usize) {
-        let Some(root) = super::super::ios::root_view() else { return };
-        let bounds = root.bounds();
         let layout = Layout::new(count);
-        let (width, height) = (layout.width, layout.height);
-        let scale = 1f64.min((bounds.size.width - 32.0) / width).min((bounds.size.height - 32.0) / height);
-        let view: Retained<PanelView> =
-            unsafe { msg_send![PanelView::alloc(mtm), initWithFrame: rect((bounds.size.width - width) / 2.0, (bounds.size.height - height) / 2.0, width, height)] };
-        view.setTransform(CGAffineTransform { a: scale, b: 0.0, c: 0.0, d: scale, tx: 0.0, ty: 0.0 });
-        view.setBackgroundColor(Some(&UIColor::colorWithWhite_alpha(0.07, 0.92)));
-        view.setAutoresizingMask(UIViewAutoresizing::FlexibleLeftMargin | UIViewAutoresizing::FlexibleRightMargin | UIViewAutoresizing::FlexibleTopMargin | UIViewAutoresizing::FlexibleBottomMargin);
-        let layer = view.layer();
-        layer.setCornerRadius(20.0);
-        layer.setBorderWidth(1.0);
-        layer.setBorderColor(Some(&*unsafe { UIColor::colorWithWhite_alpha(1.0, 0.18).CGColor() }));
-        view.addSubview(&label(mtm, "Controllers", 24.0, true, rect(20.0, 16.0, width - 40.0, 32.0)));
-        let hint = label(mtm, "", 13.0, false, rect(20.0, 52.0, width - 40.0, 20.0));
-        unsafe { hint.setTextColor(Some(&UIColor::colorWithWhite_alpha(1.0, 0.6))) };
-        view.addSubview(&hint);
-        let cards = (0..count)
-            .map(|i| {
-                let (x, y) = layout.card(i);
-                let bg = rounded(mtm, rect(x, y, CARD_W, CARD_H), 16.0);
-                let pill = rounded(mtm, rect((CARD_W - 46.0) / 2.0, 12.0, 46.0, 22.0), 11.0);
-                pill.addSubview(&label(mtm, &format!("P{}", i + 1), 13.0, true, rect(0.0, 0.0, 46.0, 22.0)));
-                let icon = UIImageView::initWithImage(UIImageView::alloc(mtm), None);
-                icon.setFrame(rect(0.0, 44.0, CARD_W, 64.0));
-                icon.setContentMode(UIViewContentMode::Center);
-                let name = label(mtm, "", 12.0, false, rect(8.0, 116.0, CARD_W - 16.0, 18.0));
-                let badge = UIImageView::initWithImage(UIImageView::alloc(mtm), image("plus.circle.fill", 15.0).as_deref());
-                badge.setFrame(rect(BADGE_X, BADGE_Y, BADGE, BADGE));
-                badge.setContentMode(UIViewContentMode::Center);
-                unsafe { badge.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, 0.55))) };
-                badge.setHidden(true);
-                bg.addSubview(&pill);
-                bg.addSubview(&icon);
-                bg.addSubview(&badge);
-                bg.addSubview(&name);
-                let dash = super::dashed(&*unsafe { UIColor::colorWithWhite_alpha(1.0, 0.3).CGColor() });
-                bg.layer().addSublayer(&dash);
-                view.addSubview(&bg);
-                CardView { bg, pill, icon, badge, dash, name }
-            })
-            .collect();
-        let footer = label(mtm, "", 14.0, false, rect(20.0, height - 36.0, width - 40.0, 20.0));
-        view.addSubview(&footer);
-        root.addSubview(&view);
+        for (root, tv) in super::super::ios::panel_hosts() {
+            let bounds = root.bounds();
+            let (width, height) = (layout.width, layout.height);
+            let scale = if tv {
+                (bounds.size.width * TV_SHARE / width).min(bounds.size.height * TV_SHARE / height)
+            } else {
+                1f64.min((bounds.size.width - 32.0) / width).min((bounds.size.height - 32.0) / height)
+            };
+            let view: Retained<PanelView> =
+                unsafe { msg_send![PanelView::alloc(mtm), initWithFrame: rect((bounds.size.width - width) / 2.0, (bounds.size.height - height) / 2.0, width, height)] };
+            view.setTransform(CGAffineTransform { a: scale, b: 0.0, c: 0.0, d: scale, tx: 0.0, ty: 0.0 });
+            view.setBackgroundColor(Some(&UIColor::colorWithWhite_alpha(0.07, 0.92)));
+            view.setAutoresizingMask(UIViewAutoresizing::FlexibleLeftMargin | UIViewAutoresizing::FlexibleRightMargin | UIViewAutoresizing::FlexibleTopMargin | UIViewAutoresizing::FlexibleBottomMargin);
+            let layer = view.layer();
+            layer.setCornerRadius(20.0);
+            layer.setBorderWidth(1.0);
+            layer.setBorderColor(Some(&*unsafe { UIColor::colorWithWhite_alpha(1.0, 0.18).CGColor() }));
+            view.addSubview(&label(mtm, "Controllers", 24.0, true, rect(20.0, 16.0, width - 40.0, 32.0)));
+            let hint = label(mtm, "", 13.0, false, rect(20.0, 52.0, width - 40.0, 20.0));
+            unsafe { hint.setTextColor(Some(&UIColor::colorWithWhite_alpha(1.0, 0.6))) };
+            view.addSubview(&hint);
+            let cards = (0..count)
+                .map(|i| {
+                    let (x, y) = layout.card(i);
+                    let bg = rounded(mtm, rect(x, y, CARD_W, CARD_H), 16.0);
+                    let pill = rounded(mtm, rect((CARD_W - 46.0) / 2.0, 12.0, 46.0, 22.0), 11.0);
+                    pill.addSubview(&label(mtm, &format!("P{}", i + 1), 13.0, true, rect(0.0, 0.0, 46.0, 22.0)));
+                    let icon = UIImageView::initWithImage(UIImageView::alloc(mtm), None);
+                    icon.setFrame(rect(0.0, 44.0, CARD_W, 64.0));
+                    icon.setContentMode(UIViewContentMode::Center);
+                    let name = label(mtm, "", 12.0, false, rect(8.0, 116.0, CARD_W - 16.0, 18.0));
+                    let badge = UIImageView::initWithImage(UIImageView::alloc(mtm), image("plus.circle.fill", 15.0).as_deref());
+                    badge.setFrame(rect(BADGE_X, BADGE_Y, BADGE, BADGE));
+                    badge.setContentMode(UIViewContentMode::Center);
+                    unsafe { badge.setTintColor(Some(&UIColor::colorWithWhite_alpha(1.0, 0.55))) };
+                    badge.setHidden(true);
+                    bg.addSubview(&pill);
+                    bg.addSubview(&icon);
+                    bg.addSubview(&badge);
+                    bg.addSubview(&name);
+                    let dash = super::dashed(&*unsafe { UIColor::colorWithWhite_alpha(1.0, 0.3).CGColor() });
+                    bg.layer().addSublayer(&dash);
+                    view.addSubview(&bg);
+                    CardView { bg, pill, icon, badge, dash, name }
+                })
+                .collect();
+            let footer = label(mtm, "", 14.0, false, rect(20.0, height - 36.0, width - 40.0, 20.0));
+            view.addSubview(&footer);
+            sharpen(&view, scale * root.contentScaleFactor());
+            root.addSubview(&view);
+            PANEL.with(|p| p.borrow_mut().push(Panel { view, cards, hint, footer }));
+        }
         LAYOUT.with(|l| l.set(Some(layout)));
-        PANEL.with(|p| *p.borrow_mut() = Some(Panel { view, cards, hint, footer }));
     }
 
     pub fn update(cards: Vec<Card>, hint: String, footer: String) {
-        PANEL.with(|p| {
-            let Some(p) = &*p.borrow() else { return };
+        PANEL.with(|panels| {
+            for p in panels.borrow().iter() {
             for (i, (v, c)) in p.cards.iter().zip(&cards).enumerate() {
                 let color = rgb(COLORS[i]);
                 let on = c.kind.is_some();
@@ -531,14 +551,16 @@ mod ui {
             }
             p.hint.setText(Some(&NSString::from_str(&hint)));
             p.footer.setText(Some(&NSString::from_str(&footer)));
+            }
         });
     }
 
     pub fn wiggle(angles: Vec<f64>) {
-        PANEL.with(|p| {
-            let Some(p) = &*p.borrow() else { return };
-            for (v, a) in p.cards.iter().zip(angles) {
-                v.icon.setTransform(rotation(a));
+        PANEL.with(|panels| {
+            for p in panels.borrow().iter() {
+                for (v, &a) in p.cards.iter().zip(&angles) {
+                    v.icon.setTransform(rotation(a));
+                }
             }
         });
     }
@@ -547,8 +569,8 @@ mod ui {
 
     pub fn close() {
         LAYOUT.with(|l| l.set(None));
-        PANEL.with(|p| {
-            if let Some(p) = p.borrow_mut().take() {
+        PANEL.with(|panels| {
+            for p in panels.borrow_mut().drain(..) {
                 p.view.removeFromSuperview();
             }
         });
@@ -609,7 +631,7 @@ pub fn controller_screen(min: usize, max: usize) -> Option<usize> {
         let now = held();
         let pressed = |i: usize, mask: u64| now[i] & mask != 0 && prev[i] & mask == 0;
         let native = kinds.iter().any(|k| matches!(k, Some(Kind::Touch | Kind::Keyboard)));
-        let add = (0..min.min(max)).find(|&j| kinds[j].is_none()).filter(|_| !native && n < min);
+        let add = crate::input::native_slot().filter(|&j| j < max && kinds[j].is_none() && !native && n < min);
         let extra = crate::input::extra_native();
         let removes = |i: usize| extra && matches!(kinds[i], Some(Kind::Touch | Kind::Keyboard));
         let mut swaps = Vec::new();
