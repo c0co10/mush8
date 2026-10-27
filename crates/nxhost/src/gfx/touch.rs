@@ -17,20 +17,26 @@ use std::time::Instant;
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 static LAST: AtomicU64 = AtomicU64::new(0);
 static IDLE: AtomicBool = AtomicBool::new(false);
+static HOLDING: AtomicBool = AtomicBool::new(false);
+const IDLE_AFTER: f32 = 10.0;
 
 fn mark() {
     LAST.store(START.elapsed().as_millis() as u64, Relaxed);
 }
 
-pub fn idle_secs() -> f32 {
+fn idle_secs() -> f32 {
     (START.elapsed().as_millis() as u64).saturating_sub(LAST.load(Relaxed)) as f32 / 1000.0
+}
+
+pub fn idle() -> bool {
+    !HOLDING.load(Relaxed) && idle_secs() > IDLE_AFTER
 }
 
 pub fn set_idle(idle: bool) {
     PAD.with(|p| {
         let mut p = p.borrow_mut();
         let Some(p) = p.as_mut() else { return };
-        if idle && p.shown {
+        if idle && p.shown && self::idle() && p.held.is_empty() && p.stick.touch.is_none() {
             IDLE.store(true, Relaxed);
             hide(p);
         } else if !idle && IDLE.swap(false, Relaxed) {
@@ -315,6 +321,7 @@ fn move_stick(s: &Stick, pt: CGPoint) {
 fn publish(p: &Pad) {
     let held = p.held.values().fold(0, |m, b| m | b);
     input::TOUCH_BUTTONS.store(held, Relaxed);
+    HOLDING.store(!p.held.is_empty() || p.stick.touch.is_some(), Relaxed);
     if p.stick.touch.is_none() {
         input::set_touch_stick(0.0, 0.0);
     }

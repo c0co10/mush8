@@ -220,7 +220,11 @@ pub fn extra_native() -> bool {
     EXTRA.load(std::sync::atomic::Ordering::Relaxed) && !crate::gfx::tv()
 }
 
-const TOUCH_IDLE: f32 = 10.0;
+static NEXT_NATIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+pub fn native_slot() -> Option<usize> {
+    Some(NEXT_NATIVE.load(std::sync::atomic::Ordering::Relaxed)).filter(|&i| i < MAX_PLAYERS)
+}
 pub static FILL_TO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 const HOLD: std::time::Duration = std::time::Duration::from_secs(120);
@@ -290,7 +294,7 @@ impl Pads {
             self.shown = show;
             crate::gfx::set_touch_controls(show);
         }
-        let idle = extra_native() && self.touch.is_some() && crate::gfx::touch_idle_secs() > TOUCH_IDLE;
+        let idle = extra_native() && self.touch.is_some() && crate::gfx::touch_idle();
         if idle != self.idle {
             self.idle = idle;
             crate::gfx::set_touch_idle(idle);
@@ -457,6 +461,8 @@ impl Pads {
                 eprintln!("[input] gamepad moves up to player {}, {} player {}", t + 1, if cfg!(target_os = "ios") { "touch controls are" } else { "keyboard is" }, g + 1);
                 changed = true;
             }
+            let next = if own { None } else { pick(self.open(), &self.kept, None) };
+            NEXT_NATIVE.store(next.unwrap_or(usize::MAX), std::sync::atomic::Ordering::Relaxed);
             let touch_slot = if own { self.touch } else { self.native_home().then_some(self.home) };
             let key_slot = touch_slot.or(Some(0));
             if changed {
