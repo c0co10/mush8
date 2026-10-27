@@ -189,7 +189,22 @@ pub fn screen_sample() -> Vec<(u32, f32, f32, u32)> {
     out
 }
 
-pub static SLOT_NAMES: std::sync::Mutex<[Option<String>; MAX_PLAYERS]> = std::sync::Mutex::new([const { None }; MAX_PLAYERS]);
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Kind {
+    Controller,
+    Keyboard,
+    Touch,
+    Iphone,
+    Browser,
+    Virtual,
+}
+
+pub static SLOT_NAMES: std::sync::Mutex<[Option<(Kind, String)>; MAX_PLAYERS]> = std::sync::Mutex::new([const { None }; MAX_PLAYERS]);
+static SWAPS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn swap(a: usize, b: usize) {
+    SWAPS.lock().unwrap().push((a, b));
+}
 pub static FILL_TO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 const HOLD: std::time::Duration = std::time::Duration::from_secs(120);
@@ -219,6 +234,9 @@ pub struct Pads {
     slots: [Option<Ctl>; MAX_PLAYERS],
     phones: [Option<u64>; MAX_PLAYERS],
     kept: Kept,
+    touch: Option<usize>,
+    home: usize,
+    shown: bool,
     extra: usize,
     fill: usize,
     touch_init: bool,
@@ -234,6 +252,9 @@ impl Pads {
             slots: Default::default(),
             phones: Default::default(),
             kept: Default::default(),
+            touch: None,
+            home: 0,
+            shown: false,
             extra,
             fill: 0,
             touch_init: false,
@@ -244,13 +265,53 @@ impl Pads {
     }
 
     pub fn poll(&mut self) -> [Option<PadState>; MAX_PLAYERS] {
-        let had_pad = self.slots[0].is_some();
         let out = self.poll_pads();
-        if self.slots[0].is_some() != had_pad || !self.touch_init {
+        let show = self.slots[self.home].is_none();
+        if show != self.shown || !self.touch_init {
             self.touch_init = true;
-            crate::gfx::set_touch_controls(self.slots[0].is_none());
+            self.shown = show;
+            crate::gfx::set_touch_controls(show);
         }
         out
+    }
+
+    fn open(&self) -> [bool; MAX_PLAYERS] {
+        let mut o = open(&self.slots, &self.phones);
+        if let Some(t) = self.touch {
+            o[t] = false;
+        }
+        o
+    }
+
+    unsafe fn number(&self, i: usize) {
+        match &self.slots[i] {
+            Some(Ctl::Apple(c)) => unsafe { c.setPlayerIndex(GCControllerPlayerIndex(if i < 4 { i as isize } else { -1 })) },
+            #[cfg(target_os = "macos")]
+            Some(Ctl::Sdl(p)) if i < 4 => p.set_player(i),
+            _ => {}
+        }
+        if let Some(d) = self.phones[i] {
+            crate::remote::set_player(d, i as u8 + 1);
+        }
+    }
+
+    unsafe fn apply_swaps(&mut self) -> bool {
+        let swaps = std::mem::take(&mut *SWAPS.lock().unwrap());
+        for &(a, b) in &swaps {
+            self.slots.swap(a, b);
+            self.phones.swap(a, b);
+            self.kept.swap(a, b);
+            if let Some(t) = &mut self.touch {
+                *t = if *t == a { b } else if *t == b { a } else { *t };
+            }
+            self.home = if self.home == a { b } else if self.home == b { a } else { self.home };
+            unsafe {
+                self.number(a);
+                self.number(b);
+            }
+            eprintln!("[input] players {} and {} swapped", a + 1, b + 1);
+        }
+        !swaps.is_empty()
     }
 
     fn poll_pads(&mut self) -> [Option<PadState>; MAX_PLAYERS] {
@@ -262,7 +323,7 @@ impl Pads {
             let sdl_ids = if sdl { crate::sdl::connected() } else { Vec::new() };
             #[cfg(target_os = "macos")]
             self.sdl_failed.keep(&sdl_ids);
-            let mut changed = false;
+            let mut changed = self.apply_swaps();
             for s in self.slots.iter_mut() {
                 let gone = match s {
                     Some(Ctl::Apple(c)) => !connected.iter().any(|n| std::ptr::eq(&**n, &**c)),
@@ -287,7 +348,7 @@ impl Pads {
                 if self.slots.iter().flatten().any(|s| matches!(s, Ctl::Apple(s) if std::ptr::eq(&**s, &*c))) {
                     continue;
                 }
-                if let Some(i) = pick(open(&self.slots, &self.phones), &self.kept, None) {
+                if let Some(i) = pick(self.open(), &self.kept, None) {
                     if i < 4 {
                         c.setPlayerIndex(GCControllerPlayerIndex(i as isize));
                     }
@@ -307,7 +368,7 @@ impl Pads {
                 if self.slots.iter().flatten().any(|s| matches!(s, Ctl::Sdl(p) if p.id() == id)) {
                     continue;
                 }
-                let Some(i) = pick(open(&self.slots, &self.phones), &self.kept, None) else { break };
+                let Some(i) = pick(self.open(), &self.kept, None) else { break };
                 let Some(pad) = self.sdl_failed.open(id, || crate::sdl::Pad::open(id)) else { continue };
                 if i < 4 {
                     pad.set_player(i);
@@ -324,7 +385,11 @@ impl Pads {
                 if self.phones.contains(&Some(device)) {
                     continue;
                 }
-                let Some(i) = pick(open(&self.slots, &self.phones), &self.kept, Some(device)) else {
+                let mut open = self.open();
+                if cfg!(target_os = "ios") && self.slots[self.home].is_none() {
+                    open[self.home] = false;
+                }
+                let Some(i) = pick(open, &self.kept, Some(device)) else {
                     crate::remote::set_player(device, 0);
                     continue;
                 };
@@ -338,6 +403,22 @@ impl Pads {
                 crate::remote::set_player(device, i as u8 + 1);
                 changed = true;
             }
+            if self.home != 0 && self.slots[0].is_none() && self.phones[0].is_none() {
+                self.home = 0;
+                changed = true;
+            }
+            let tv = crate::gfx::tv();
+            if !tv && self.touch.take().is_some() {
+                changed = true;
+            } else if tv && self.touch.is_none() {
+                self.touch = pick(self.open(), &self.kept, None);
+                if let Some(i) = self.touch {
+                    eprintln!("[input] touch controls are player {} (game on the TV)", i + 1);
+                    self.kept[i] = None;
+                    changed = true;
+                }
+            }
+            let touch_slot = if tv { self.touch } else { self.slots[self.home].is_none().then_some(self.home) };
             if changed {
                 crate::haptics::set_controllers(&self.slots);
             }
@@ -364,18 +445,19 @@ impl Pads {
                 }
                 if i == 0 {
                     acc.keyboard();
-                    if slot.is_none() {
-                        acc.touch();
-                    }
                 }
-                let filler = i > 0 && i < fill && slot.is_none() && remote.is_none();
+                if touch_slot == Some(i) {
+                    acc.touch();
+                }
+                let touched = touch_slot == Some(i);
+                let filler = i > 0 && i < fill && slot.is_none() && remote.is_none() && !touched;
                 let virtual_pad = filler || (i > 0 && slot.is_none() && virtual_left > 0);
                 if virtual_pad && !filler {
                     virtual_left -= 1;
                 }
                 if filler {
                     out[i] = out[0];
-                } else if i == 0 || slot.is_some() || remote.is_some() || virtual_pad {
+                } else if i == 0 || slot.is_some() || remote.is_some() || touched || virtual_pad {
                     out[i] = Some(acc.state());
                 }
                 let sample = if !motion_enabled() {
@@ -384,19 +466,21 @@ impl Pads {
                     c.motion().map(|m| (m, true))
                 } else if let Some(pad) = &remote {
                     pad.motion.map(|m| (m, false))
+                } else if touched {
+                    phone_sample(phone, 0).map(|m| (m, false))
                 } else {
-                    phone_sample(phone, i).map(|m| (m, false))
+                    None
                 };
                 MOTION.lock().unwrap()[i] = sample;
                 if !(changed || !self.touch_init) {
                     continue;
                 }
                 let name = match slot {
-                    Some(c) => Some(c.name()),
-                    None if remote.is_some() => Some(if self.phones[i].is_some_and(crate::remote::is_web) { "Browser" } else { "iPhone" }.into()),
-                    None if i == 0 && cfg!(target_os = "ios") => Some("Touch controls".into()),
-                    None if i == 0 => Some("Keyboard".into()),
-                    None if virtual_pad => Some("Virtual controller".into()),
+                    Some(c) => Some((Kind::Controller, c.name())),
+                    None if remote.is_some() => Some(if self.phones[i].is_some_and(crate::remote::is_web) { (Kind::Browser, "Browser".into()) } else { (Kind::Iphone, "iPhone".into()) }),
+                    None if touched && cfg!(target_os = "ios") => Some((Kind::Touch, "Touch controls".into())),
+                    None if i == 0 => Some((Kind::Keyboard, "Keyboard".into())),
+                    None if virtual_pad => Some((Kind::Virtual, "Virtual controller".into())),
                     None => None,
                 };
                 SLOT_NAMES.lock().unwrap()[i] = name;
