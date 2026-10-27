@@ -3,6 +3,7 @@
 use crate::remote::{self, Pad};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 const PORT: u16 = 2904;
@@ -11,6 +12,9 @@ const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const STATUS: Duration = Duration::from_millis(500);
 const SILENCE: Duration = Duration::from_secs(3);
 const LIMIT: usize = 1 << 16;
+const MAX_CLIENTS: usize = 16;
+
+static CLIENTS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn enabled() -> bool {
     std::env::var("NX_BROWSER_PADS").is_ok_and(|v| v == "1")
@@ -29,7 +33,18 @@ pub fn host() {
 fn serve(listener: TcpListener) {
     let _ = std::thread::Builder::new().name("webpad".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
-            let _ = std::thread::Builder::new().name("webpad-client".into()).spawn(move || client(stream));
+            if CLIENTS.fetch_add(1, Relaxed) >= MAX_CLIENTS {
+                CLIENTS.fetch_sub(1, Relaxed);
+                eprintln!("[webpad] {MAX_CLIENTS} browsers already connected: refusing another");
+                continue;
+            }
+            let spawned = std::thread::Builder::new().name("webpad-client".into()).spawn(move || {
+                client(stream);
+                CLIENTS.fetch_sub(1, Relaxed);
+            });
+            if spawned.is_err() {
+                CLIENTS.fetch_sub(1, Relaxed);
+            }
         }
     });
 }
