@@ -246,7 +246,7 @@ mod phone {
         }
     }
 
-    const LOOKING: &str = "Looking for a Mac running Mush8 on this Wi-Fi…\n(start the game on the Mac, with iPhone controllers on)";
+    const LOOKING: &str = "Looking for Mush8 running on this Wi-Fi…\n(start the game there, with Remote controllers on)";
     const DENIED: &str = "Local network access is off for Mush8\n\nTurn it on in Settings → Privacy & Security → Local Network";
 
     #[derive(Default)]

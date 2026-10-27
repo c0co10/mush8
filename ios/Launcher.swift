@@ -24,6 +24,22 @@ func nspKind(_ url: URL) -> String? {
     }
 }
 
+func lanIP() -> String? {
+    var list: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&list) == 0, let first = list else { return nil }
+    defer { freeifaddrs(list) }
+    var found: [String: String] = [:]
+    for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        let a = p.pointee
+        guard let addr = a.ifa_addr, addr.pointee.sa_family == sa_family_t(AF_INET), a.ifa_flags & UInt32(IFF_UP) != 0 else { continue }
+        let name = String(cString: a.ifa_name)
+        let ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { String(cString: inet_ntoa($0.pointee.sin_addr)) }
+        if found[name] == nil { found[name] = ip }
+    }
+    if let wifi = found["en0"] { return wifi }
+    return found.filter { $0.key.hasPrefix("bridge") }.sorted { $0.key < $1.key }.first?.value
+}
+
 let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 let configURL = docsURL.appendingPathComponent("config.json")
 
@@ -37,6 +53,7 @@ final class Settings: ObservableObject {
     @Published var motion = false
     @Published var handheld = true
     @Published var phonePads = false
+    @Published var browserPads = false
     @Published var fillScreen = true
     @Published var hudAtEdges = true
     @Published var hudScale = 1.0
@@ -59,6 +76,7 @@ final class Settings: ObservableObject {
         motion = json["motion_controls"] as? Bool ?? false
         handheld = json["handheld"] as? Bool ?? true
         phonePads = json["phone_pads"] as? Bool ?? false
+        browserPads = json["browser_pads"] as? Bool ?? false
         fillScreen = json["aspect"] as? String != "16:9"
         hudAtEdges = json["hud"] as? String != "center"
         hudScale = json["hud_scale"] as? Double ?? 1.0
@@ -78,6 +96,7 @@ final class Settings: ObservableObject {
         json["motion_controls"] = motion
         json["handheld"] = handheld
         json["phone_pads"] = phonePads
+        json["browser_pads"] = browserPads
         json["aspect"] = fillScreen ? "fill" : "16:9"
         json["hud"] = hudAtEdges ? "edges" : "center"
         json["hud_scale"] = hudScale
@@ -236,7 +255,7 @@ struct LauncherView: View {
                 } else {
                     importView
                 }
-                Button("Use as a controller for a Mac") {
+                Button("Use as a controller") {
                     network.stop()
                     controller()
                 }
@@ -247,26 +266,16 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity)
             Form {
                 if !files.ready { gameFilesSection }
-                Section("Multiplayer") {
+                Section {
                     Picker("Mode", selection: $s.network) {
                         Text("Off").tag("off")
                         Text("LAN").tag("lan")
                         Text("Online").tag("lanplay")
                         Text("Wireless (nearby)").tag("wireless")
                     }
-                    switch s.network {
-                    case "lan":
-                        caption(broadcastAvailable()
-                                ? "Switch and Mush8 players on the same network can join"
-                                : "Mush8 players on the same network can join")
-                    case "lanplay":
+                    if s.network == "lanplay" {
                         TextField("Server (host:port)", text: $s.lanPlayServer)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        caption("Lan-Play.com clients on the same server can join")
-                    case "wireless":
-                        caption("Nearby Mush8 clients can join (keep Wi-Fi on)")
-                    default:
-                        EmptyView()
                     }
                     if network.denied && usesLocalNetwork {
                         Text("Local network access was denied : other players can't be reached")
@@ -275,28 +284,30 @@ struct LauncherView: View {
                             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                         }.font(.caption)
                     }
-                    Toggle("Vibration", isOn: $s.rumble)
-                    Toggle("Motion controls", isOn: $s.motion)
+                } header: {
+                    Text("Multiplayer")
+                } footer: {
+                    if let note = multiplayerNote { Text(note) }
                 }
                 Section {
-                    Toggle("Spatial audio", isOn: $s.spatial)
+                    Toggle("Remote controllers", isOn: $s.phonePads)
+                    if s.phonePads {
+                        Toggle("Web controllers", isOn: $s.browserPads)
+                        if s.browserPads {
+                            LabeledContent("Address", value: lanIP().map { "http://\($0):2904" } ?? "no Wi-Fi")
+                                .textSelection(.enabled)
+                        }
+                    }
                 } footer: {
-                    Text("Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
-                }
-                Section {
-                    Toggle("iPhone controllers", isOn: $s.phonePads)
-                } footer: {
-                    Text("Nearby iPhones can join as players with \"Use as a controller\"")
+                    Text(s.phonePads && s.browserPads
+                        ? "After you press Play, other phones on the same Wi-Fi can open this address in their browser and join as players. The IP can change"
+                        : "Nearby iPhones can join as players with \"Use as a controller\"")
                 }
                 Section {
                     Picker("Console mode", selection: $s.handheld) {
                         Text("Docked (1080p)").tag(false)
                         Text("Handheld (720p)").tag(true)
                     }
-                } footer: {
-                    Text("Handheld renders at 720p: lighter on the GPU and battery")
-                }
-                Section {
                     Picker("Screen", selection: $s.fillScreen) {
                         Text("16:9").tag(false)
                         Text("Fill screen").tag(true)
@@ -312,14 +323,23 @@ struct LauncherView: View {
                         Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
                         Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("Graphics")
                 } footer: {
-                    Text("Fill screen widens the race to the whole display, menus and HUD keep their proportions")
+                    Text("Handheld renders at 720p: lighter on the GPU and battery. Fill screen widens the race to the whole display")
                 }
                 Section {
                     Toggle("Prewarm pipelines", isOn: $s.prewarm)
                     Toggle("Background shader compiling", isOn: $s.backgroundCompile)
                 } footer: {
                     Text("Builds the game's graphics pipelines in the background at startup")
+                }
+                Section {
+                    Toggle("Spatial audio", isOn: $s.spatial)
+                    Toggle("Vibration", isOn: $s.rumble)
+                    Toggle("Motion controls", isOn: $s.motion)
+                } header: {
+                    Text("Audio & controls")
                 }
                 Section {
                     HStack {
@@ -403,11 +423,20 @@ struct LauncherView: View {
         #endif
     }
 
-    var usesLocalNetwork: Bool { s.network == "lan" || s.network == "wireless" || s.phonePads }
-
-    func caption(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
+    var multiplayerNote: String? {
+        switch s.network {
+        case "lan":
+            return broadcastAvailable() ? "Switch and Mush8 players on the same network can join" : "Mush8 players on the same network can join"
+        case "lanplay":
+            return "Lan-Play.com clients on the same server can join"
+        case "wireless":
+            return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        default:
+            return nil
+        }
     }
+
+    var usesLocalNetwork: Bool { s.network == "lan" || s.network == "wireless" || s.phonePads }
 
     func start() {
         if s.network == "lanplay" && s.lanPlayServer.trimmingCharacters(in: .whitespaces).isEmpty {
