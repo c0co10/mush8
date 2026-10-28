@@ -97,7 +97,6 @@ mods/
 - Nintendo's online play isnt available
 - 5 to 8 players split screen is Switch 2 only
 - no amiibo (yet)
-- the two WebM videos (credits, Switch 2 dialog) play as a slideshow
 
 ## Credits
 Thanks to everyone who contributed :
@@ -109,3 +108,6 @@ Thanks to everyone who contributed :
 - [184904](https://github.com/184904) : null index buffer fix
 
 Contributions are welcome !
+
+## Third party
+- [libvpx](https://chromium.googlesource.com/webm/libvpx) v1.17.0 VP8 decoder (BSD 3-Clause, see `crates/vpx/libvpx/LICENSE` and `PATENTS`) : WebM movies

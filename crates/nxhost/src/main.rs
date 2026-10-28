@@ -120,8 +120,6 @@ struct Args {
     mods: Vec<PathBuf>,
     #[arg(long)]
     precompile: bool,
-    #[arg(long)]
-    movies: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -252,10 +250,6 @@ fn start(args: Args) -> Result<()> {
     let version = game::identify(&update, &dir)?;
     let romfs = mods::romfs(program(&update)?.patched_romfs(program(&base)?)?, &args.mods)?;
     eprintln!("[host] RomFS: {:.2} GB", nxfs::storage::Storage::size(&*romfs) as f64 / 1e9);
-    if args.movies {
-        movie::webm::convert_all(romfs)?;
-        std::process::exit(0);
-    }
     if args.precompile {
         let modules: Vec<PathBuf> = ["main", "subsdk0", "sdk"].iter().map(|m| dir.join(format!("{m}.bin"))).collect();
         nvn::precompile(romfs, &modules)?;

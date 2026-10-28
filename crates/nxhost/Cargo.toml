@@ -13,6 +13,7 @@ mp4 = "0.14.0"
 nxabi = { version = "0.1.0", path = "../nxabi" }
 nxfs = { version = "0.1.0", path = "../nxfs" }
 nxshader = { version = "0.1.0", path = "../nxshader" }
+vpx = { version = "0.1.0", path = "../vpx" }
 objc2 = "0.6.5"
 objc2-audio-toolbox = "0.3.2"
 objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media", "objc2-core-video"] }
@@ -27,7 +28,6 @@ objc2-game-controller = "0.3.2"
 objc2-metal = "0.3.2"
 objc2-quartz-core = "0.3.2"
 bcdec_rs = "0.2.0"
-image-webp = "0.2.4"
 png = "0.18.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]

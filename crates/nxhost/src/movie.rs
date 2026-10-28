@@ -211,11 +211,6 @@ fn open(e: &mut Extractor, name: &str, data: Vec<u8>) -> u64 {
     if !webm::is_webm(&data) {
         return open_mp4(e, name, data);
     }
-    if let Some((file, mp4)) = webm::converted(name) {
-        return open_mp4(e, &file, mp4);
-    }
-    #[cfg(target_os = "macos")]
-    webm::convert_later(name, &data);
     let Some(m) = webm::Movie::parse(data) else {
         eprintln!("[movie] {name}: unreadable WebM");
         return UNKNOWN_ERROR;
