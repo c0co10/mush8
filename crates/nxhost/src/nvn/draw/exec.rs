@@ -195,10 +195,15 @@ impl Replay<'_> {
                 let swz = tb.map(|b| [0x38usize, 0x3c, 0x40, 0x44].map(|o| u32::from_le_bytes(b[o..o + 4].try_into().unwrap())));
                 eprintln!("[frame]   tex {}{b}: id {tid} pool {:#x} -> {:?} swizzle {swz:?}", ["v", "f", "c"][stage], st.texture_pool, got.as_ref().map(|(k, _, _)| (k.addr, k.format, k.width, k.height)));
             }
-            let tex = got
-                .and_then(|(k, t, tb)| self.e.textures.view(k, &tb, &t, kind))
-                .filter(|t| !kind.is_depth() || gfx_is_depth(t.0.pixelFormat()))
-                .unwrap_or_else(|| self.e.textures.dummy(kind));
+            let tex = match got {
+                Some((k, t, tb)) => self
+                    .e
+                    .textures
+                    .view(k, &tb, &t, kind)
+                    .filter(|t| !kind.is_depth() || gfx_is_depth(t.0.pixelFormat()))
+                    .unwrap_or_else(|| self.e.textures.fallback(kind, &t)),
+                None => self.e.textures.dummy(kind),
+            };
             let sampler = self.e.textures.sampler(sb.as_ref());
             let slot = c.iface.samplers.get(&b).copied().unwrap_or(0);
             bound.push((b, tex, slot, sampler));
