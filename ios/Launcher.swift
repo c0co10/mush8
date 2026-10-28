@@ -48,6 +48,7 @@ final class Settings: ObservableObject {
     @Published var lanPlayServer = ""
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var rumbleMin = 0.45
     @Published var spatial = true
     @Published var backgroundCompile = true
     @Published var motion = false
@@ -71,6 +72,7 @@ final class Settings: ObservableObject {
         lanPlayServer = json["lanplay_server"] as? String ?? ""
         prewarm = json["prewarm_pipelines"] as? Bool ?? true
         rumble = json["rumble"] as? Bool ?? true
+        rumbleMin = json["rumble_min"] as? Double ?? 0.45
         spatial = json["spatial_audio"] as? Bool ?? true
         backgroundCompile = json["background_compile"] as? Bool ?? true
         motion = json["motion_controls"] as? Bool ?? false
@@ -90,6 +92,7 @@ final class Settings: ObservableObject {
         json["extra_pads"] = nil
         json["prewarm_pipelines"] = prewarm
         json["rumble"] = rumble
+        json["rumble_min"] = rumbleMin
         json["spatial_audio"] = spatial
         json["background_compile"] = backgroundCompile
         json["motion"] = nil
@@ -337,9 +340,18 @@ struct LauncherView: View {
                 Section {
                     Toggle("Spatial audio", isOn: $s.spatial)
                     Toggle("Vibration", isOn: $s.rumble)
+                    if s.rumble {
+                        HStack {
+                            Text("Rumble cutoff")
+                            Slider(value: $s.rumbleMin, in: 0...0.9, step: 0.05)
+                            Text("\(Int((s.rumbleMin * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
                     Toggle("Motion controls", isOn: $s.motion)
                 } header: {
                     Text("Audio & controls")
+                } footer: {
+                    Text("Controller rumble weaker than the cutoff stays off, which stops the constant buzz on Xbox and PlayStation controllers. The phone and Switch controllers are not affected")
                 }
                 Section {
                     HStack {

@@ -44,6 +44,16 @@ pub fn rumble(id: SDL_JoystickID, low: u16, high: u16, ms: u32) -> bool {
     }
 }
 
+pub fn resonant(id: SDL_JoystickID) -> bool {
+    matches!(
+        unsafe { SDL_GetGamepadTypeForID(id) },
+        SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO
+            | SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT
+            | SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT
+            | SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR
+    )
+}
+
 #[derive(Default)]
 pub struct OpenOnce {
     failed: Vec<SDL_JoystickID>,

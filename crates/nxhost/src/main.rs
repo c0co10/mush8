@@ -210,6 +210,9 @@ fn apply_launcher_settings() {
     if field("rumble").as_deref() == Some("false") {
         unsafe { std::env::set_var("NX_RUMBLE", "0") };
     }
+    if let Some(min) = field("rumble_min") {
+        unsafe { std::env::set_var("NX_RUMBLE_MIN", min) };
+    }
     if field("gamepad_driver").as_deref() == Some("sdl") {
         unsafe { std::env::set_var("NX_PAD_DRIVER", "sdl") };
     }

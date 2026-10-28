@@ -126,6 +126,7 @@ final class Settings: ObservableObject {
     @Published var pipelineArchive = false
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var rumbleMin = 0.45
     @Published var padDriver = "apple"
     @Published var spatial = true
     @Published var backgroundCompile = true
@@ -158,6 +159,7 @@ final class Settings: ObservableObject {
         pipelineArchive = j["pipeline_archive"] as? Bool ?? false
         prewarm = j["prewarm_pipelines"] as? Bool ?? true
         rumble = j["rumble"] as? Bool ?? true
+        rumbleMin = j["rumble_min"] as? Double ?? 0.45
         padDriver = j["gamepad_driver"] as? String ?? "apple"
         spatial = j["spatial_audio"] as? Bool ?? true
         backgroundCompile = j["background_compile"] as? Bool ?? true
@@ -183,7 +185,7 @@ final class Settings: ObservableObject {
         let j: [String: Any] = [
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
-            "prewarm_pipelines": prewarm, "rumble": rumble, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
+            "prewarm_pipelines": prewarm, "rumble": rumble, "rumble_min": rumbleMin, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
             "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads, "browser_pads": browserPads,
             "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
             "disabled_mods": disabledMods,
@@ -209,6 +211,7 @@ final class Settings: ObservableObject {
         if pipelineArchive { env["NX_PIPELINE_ARCHIVE"] = "1" }
         if prewarm { env["NX_PREWARM"] = "1" }
         if !rumble { env["NX_RUMBLE"] = "0" }
+        env["NX_RUMBLE_MIN"] = String(rumbleMin)
         env["NX_PAD_DRIVER"] = padDriver
         if !spatial { env["NX_SPATIAL"] = "0" }
         if !backgroundCompile { env["NX_SYNC_SHADERS"] = "1" }
@@ -581,6 +584,17 @@ struct LauncherView: View {
         Section {
             Toggle("Spatial audio", isOn: $s.spatial)
             Toggle("Vibration", isOn: $s.rumble)
+            if s.rumble {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Rumble cutoff")
+                        Slider(value: $s.rumbleMin, in: 0...0.9, step: 0.05)
+                        Text("\(Int((s.rumbleMin * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Text("Controller rumble weaker than this stays off, which stops the constant buzz on Xbox and PlayStation controllers. Switch controllers are not affected")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Toggle("Motion controls", isOn: $s.motion)
             Picker(selection: $s.padDriver) {
                 Text("Apple").tag("apple")

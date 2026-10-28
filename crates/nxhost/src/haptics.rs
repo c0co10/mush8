@@ -6,7 +6,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, msg_send};
 use objc2_core_haptics::*;
 use objc2_foundation::NSArray;
-use objc2_game_controller::{GCController, GCHapticsLocalityDefault};
+use objc2_game_controller::{GCController, GCDevice, GCHapticsLocalityDefault};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,11 @@ impl Value {
         }
         let freq = (lo * self.freq_low + hi * self.freq_high) / (lo + hi);
         (lo.max(hi * 0.12).powf(0.6), ((freq - 80.0) / 320.0).clamp(0.0, 1.0))
+    }
+
+    fn cut(self, min: f32) -> Value {
+        let cut = |a: f32| if a <= min { 0.0 } else { (a - min) / (1.0 - min) };
+        Value { amp_low: cut(self.amp_low), amp_high: cut(self.amp_high), ..self }
     }
 }
 
@@ -76,16 +81,41 @@ fn sdl_step(state: SdlState, strength: (u16, u16), now: Instant) -> (bool, SdlSt
 struct Shared {
     values: [[Value; 2]; MAX_PLAYERS],
     controllers: [Option<Target>; MAX_PLAYERS],
+    motors: [bool; MAX_PLAYERS],
     dirty: bool,
 }
 
-static SHARED: Mutex<Shared> =
-    Mutex::new(Shared { values: [[Value::IDLE; 2]; MAX_PLAYERS], controllers: [const { None }; MAX_PLAYERS], dirty: false });
+static SHARED: Mutex<Shared> = Mutex::new(Shared {
+    values: [[Value::IDLE; 2]; MAX_PLAYERS],
+    controllers: [const { None }; MAX_PLAYERS],
+    motors: [false; MAX_PLAYERS],
+    dirty: false,
+});
 static WAKE: Condvar = Condvar::new();
 
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("NX_RUMBLE").as_deref() != Ok("0"))
+}
+
+fn parse_min(v: Option<&str>) -> f32 {
+    v.and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).map_or(0.45, |v| v.clamp(0.0, 0.9))
+}
+
+fn rumble_min() -> f32 {
+    static MIN: OnceLock<f32> = OnceLock::new();
+    *MIN.get_or_init(|| parse_min(std::env::var("NX_RUMBLE_MIN").ok().as_deref()))
+}
+
+fn motors(ctl: &crate::input::Ctl) -> bool {
+    match ctl {
+        crate::input::Ctl::Apple(c) => {
+            let category = unsafe { c.productCategory() }.to_string();
+            !category.contains("Switch") && !category.contains("Joy-Con")
+        }
+        #[cfg(target_os = "macos")]
+        crate::input::Ctl::Sdl(p) => !crate::sdl::resonant(p.id()),
+    }
 }
 
 pub fn send(player: usize, side: usize, v: Value) {
@@ -114,6 +144,7 @@ pub fn set_controllers(slots: &[Option<crate::input::Ctl>; MAX_PLAYERS]) {
         Some(crate::input::Ctl::Sdl(p)) => Some(Target::Sdl(p.id())),
         None => None,
     });
+    s.motors = std::array::from_fn(|i| slots[i].as_ref().is_some_and(motors));
     s.dirty = true;
     WAKE.notify_one();
 }
@@ -224,7 +255,7 @@ struct Out {
 fn run() {
     let mut outs: [Out; MAX_PLAYERS] = std::array::from_fn(|_| Out { source: Source::None, engine: None, retry: None, sdl: None });
     loop {
-        let (values, controllers, sdl_ids) = {
+        let (values, controllers, sdl_ids, motors) = {
             let mut s = SHARED.lock().unwrap();
             while !s.dirty {
                 let active = outs.iter().any(|o| o.engine.as_ref().is_some_and(|e| e.started.is_some()) || o.sdl.is_some());
@@ -243,7 +274,7 @@ fn run() {
                 Some(Target::Sdl(id)) => Some(id.0),
                 _ => None,
             });
-            (s.values, ctls, sdl_ids)
+            (s.values, ctls, sdl_ids, s.motors)
         };
         objc2::rc::autoreleasepool(|_| {
             for (i, out) in outs.iter_mut().enumerate() {
@@ -264,9 +295,10 @@ fn run() {
                     out.engine = None;
                     out.retry = None;
                 }
+                let value = if motors[i] { values[i].map(|v| v.cut(rumble_min())) } else { values[i] };
                 #[cfg(target_os = "macos")]
                 if let Source::Sdl(id) = out.source {
-                    let strength = sdl_strength(values[i]);
+                    let strength = sdl_strength(value);
                     let (send, next) = sdl_step(out.sdl, strength, Instant::now());
                     if send {
                         let ms = if strength == (0, 0) { 0 } else { RUMBLE_MS };
@@ -275,7 +307,7 @@ fn run() {
                     out.sdl = next;
                     continue;
                 }
-                let (l, r) = (values[i][0].feel(), values[i][1].feel());
+                let (l, r) = (value[0].feel(), value[1].feel());
                 let feel = if l.0 >= r.0 { l } else { r };
                 if out.source == Source::None || (out.engine.is_none() && feel.0 < 0.02) {
                     continue;
@@ -314,6 +346,15 @@ mod tests {
         assert_eq!(sdl_strength([v(1.0, 340.0, 0.0, 200.0), Value::IDLE]), (32768, 0));
         let nan = Value { amp_low: f32::NAN, ..Value::IDLE };
         assert_eq!(sdl_strength([nan, nan]), (0, 0));
+    }
+
+    #[test]
+    fn cutoff_silences_quiet_levels_and_stretches_the_rest() {
+        let v = |amp_low, amp_high| Value { amp_low, amp_high, ..Value::IDLE };
+        assert_eq!(v(0.4, 0.45).cut(0.45), v(0.0, 0.0));
+        assert_eq!(v(1.0, 0.75).cut(0.5), v(1.0, 0.5));
+        assert_eq!(v(0.3, 1.0).cut(0.0), v(0.3, 1.0));
+        assert_eq!((parse_min(None), parse_min(Some("0")), parse_min(Some("2")), parse_min(Some("x"))), (0.45, 0.0, 0.9, 0.45));
     }
 
     #[test]
