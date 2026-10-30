@@ -97,7 +97,7 @@ enum GameBanana {
             return BananaFile(id: file.id, name: file.name, size: file.size, url: file.url, md5: file.md5?.nilIfEmpty,
                               version: file.version?.nilIfEmpty, note: file.description?.nilIfEmpty,
                               downloadCount: file.downloadCount ?? 0, dateAdded: file.dateAdded)
-        }
+        }.sorted { ($0.dateAdded ?? 0) > ($1.dateAdded ?? 0) }
     }
 
     static func download(_ file: BananaFile, to destination: URL,
