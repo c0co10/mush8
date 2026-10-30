@@ -13,6 +13,8 @@ pub mod keypage {
     pub const OS_HEAP: u32 = 0x40;
     pub const SPLIT_DIV: u32 = 0x48;
     pub const ASPECT: u32 = 0x50;
+
+    pub const NET_NEXTENDO: u8 = 4;
 }
 
 pub mod ctx {

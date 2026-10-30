@@ -114,6 +114,7 @@ impl<'a> Machine<'a> {
             uc.mem_write(kp + keypage::CTX_SLOT as u64, &SLOT.to_le_bytes()).map_err(e)?;
             uc.mem_write(kp + keypage::SVC_GATE as u64, &GATE.to_le_bytes()).map_err(e)?;
             uc.mem_write(kp + keypage::CNT_MUL as u64, &CNT_MUL.to_le_bytes()).map_err(e)?;
+            uc.mem_write(kp + keypage::NET as u64, &[keypage::NET_NEXTENDO]).map_err(e)?;
             uc.mem_write(TSD + SLOT, &CTX.to_le_bytes()).map_err(e)?;
         }
         uc.reg_write(R::CPACR_EL1, 3 << 20).map_err(e)?;

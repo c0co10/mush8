@@ -187,8 +187,7 @@ fn ios_mods() -> Vec<PathBuf> {
 fn apply_launcher_settings() {
     let config = std::fs::read_to_string("config.json").unwrap_or_default();
     let field = |key: &str| {
-        let rest = config.split(&format!("\"{key}\"")).nth(1)?;
-        let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+        let rest = config.split(&format!("\"{key}\"")).skip(1).find_map(|r| r.trim_start().strip_prefix(':'))?.trim_start();
         if let Some(rest) = rest.strip_prefix('"') {
             let mut out = String::new();
             let mut chars = rest.chars();
@@ -215,6 +214,9 @@ fn apply_launcher_settings() {
     }
     if let Some(server) = field("lanplay_server").filter(|s| !s.is_empty()) {
         unsafe { std::env::set_var("NX_LANPLAY_SERVER", server) };
+    }
+    if let Some(pid) = field("nextendo_pid").filter(|s| !s.is_empty() && s != "0") {
+        unsafe { std::env::set_var("NX_NEXTENDO_PID", pid) };
     }
     if field("prewarm_pipelines").as_deref() != Some("false") {
         unsafe { std::env::set_var("NX_PREWARM", "1") };
@@ -325,6 +327,7 @@ fn start(args: Args) -> Result<()> {
     a.set(a.stack(), stack_size, mem::Block { state: mem::state::STACK, perm: mem::perm::RW, attr: 0 })?;
     let h = kernel::create_thread(start, 0, a.stack() + stack_size, npdm.priority as i32, npdm.core as i32)?;
     let t = kernel::thread(h).unwrap();
+    services::nextendo::log_start();
     eprintln!("[host] main thread {h:#x}: prio {} core {} stack {stack_size:#x}; entering nn::init::Start", npdm.priority, npdm.core);
     let main_base = mods[0].base;
     let j = kernel::start_thread(t, [h as u64, main_base, init_done as *const () as usize as u64, init_modules as *const () as usize as u64])?;

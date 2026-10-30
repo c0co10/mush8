@@ -67,6 +67,9 @@ Pick a mode in the launcher, under Multiplayer :
 - LAN : players on the same network, a Switch can join too
 - Online : any lan-play.com server (`host:port`), Switches on that server included
 - Wireless : nearby Mush8 players
+- Nextendo : Mario Kart 8 Deluxe online on the [Nextendo Network](https://nextendo.network) servers, with Switch players using [Prelude-Nextendo](https://github.com/NextendoNetwork/Prelude-Nextendo). Sign in with your Nextendo account under Multiplayer (on nextendo.network, Mush8 never sees your password). Needs update 4.0.1. In this mode the game's own Online button and online ghost options come back, and Local Wireless becomes LAN
+
+In Nextendo mode the game can only look up Nextendo's servers : every other name is blocked, and TLS is only accepted from Nextendo's addresses. Mush8 keeps your sign-in in the Keychain and sends its game token only to Nextendo. Online races are peer to peer, so other players see your IP address, and the game's code runs unsandboxed on your device, so only play with people you trust if you're worried about that
 
 ## Controls
 Any controller normally works (Switch Pro, Joy-Con, DualSense, Xbox...). On macOS the keyboard works too (WASD stick, arrows d-pad, X/Return A, Z/Backspace B, Q/E L/R, 1/3 ZL/ZR, Tab +), on iOS there are touch controls when no controller is connected

@@ -1,7 +1,8 @@
 // Mush8 - account.rs
 // Constantin Clerc (c22dev) - 0.1
-use crate::ipc::{Request, Response, Service, Stub, write_buffer};
+use crate::ipc::{Act, Request, Response, Service, Stub, Table, write_buffer};
 use crate::services::am::USER_ID;
+use crate::services::nextendo;
 use std::sync::Arc;
 
 const NICKNAME: &str = "Player";
@@ -76,6 +77,9 @@ impl Service for ManagerForApplication {
         "account::IManagerForApplication".into()
     }
     fn call(&self, req: &Request, rsp: &mut Response) -> u32 {
+        if nextendo::enabled() && nextendo::pid() != 0 {
+            return linked(req, rsp);
+        }
         match req.cmd {
             0 | 2 | 3 | 130 | 170 => NOT_LINKED,
             1 => {
@@ -86,4 +90,45 @@ impl Service for ManagerForApplication {
             _ => Stub(self.name()).call(req, rsp),
         }
     }
+}
+
+const SUBSCRIBED: u32 = 1;
+
+fn async_done() -> Arc<dyn Service> {
+    Arc::new(Table {
+        name: "account::IAsyncContext",
+        cmds: &[(0, Act::Event(true)), (1, Act::Ok), (2, Act::Data(&[1])), (3, Act::Ok), (100, Act::U32(SUBSCRIBED))],
+    })
+}
+
+fn linked(req: &Request, rsp: &mut Response) -> u32 {
+    match req.cmd {
+        0 | 160 => {}
+        1 => rsp.push_u64(nextendo::pid()),
+        2 | 170 => rsp.objects.push(async_done()),
+        3 | 4 => {
+            let token = nextendo::id_token();
+            let token = token.as_bytes();
+            if let Some(b) = req.out_buffer() {
+                let mut out = vec![0u8; b.size as usize];
+                let n = token.len().min(out.len());
+                out[..n].copy_from_slice(&token[..n]);
+                write_buffer(&b, &out);
+            }
+            rsp.push_u32(token.len() as u32);
+        }
+        130 => {
+            let mut base = [0u8; 0x68];
+            base[..10].copy_from_slice(b"2000-01-01");
+            if let Some(c) = req.c.iter().find(|b| b.addr != 0 && b.size >= 0x68) {
+                write_buffer(c, &base);
+            }
+            if let Some(b) = req.b.iter().find(|b| b.addr != 0) {
+                write_buffer(b, &vec![0u8; b.size as usize]);
+            }
+            rsp.push_u64(nextendo::pid());
+        }
+        _ => return Stub("account::IManagerForApplication".into()).call(req, rsp),
+    }
+    0
 }

@@ -16,7 +16,11 @@ mod lm;
 pub mod mii;
 mod nfp;
 pub mod nifm;
+pub mod nextendo;
+mod nsd;
 mod pl;
+mod sfdnsres;
+mod ssl;
 mod time;
 pub mod vi;
 mod wireless;
@@ -43,6 +47,9 @@ pub fn open(name: &str) -> Arc<dyn Service> {
         "bsd:s" => bsd::open("bsd:s"),
         "friend:u" | "friend:v" | "friend:m" | "friend:s" | "friend:a" => friend::open(),
         "aoc:u" => Arc::new(aoc::Aoc),
+        "sfdnsres" if nextendo::enabled() => Arc::new(sfdnsres::Resolver),
+        "nsd:u" | "nsd:a" if nextendo::enabled() => Arc::new(nsd::Nsd),
+        "ssl" if nextendo::enabled() => ssl::open(),
         "nfp:user" => nfp::open(),
         "set" => Arc::new(set::Settings),
         "pctl" | "pctl:s" | "pctl:a" | "pctl:r" => Arc::new(Table {

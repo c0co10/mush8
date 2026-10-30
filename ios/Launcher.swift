@@ -46,6 +46,8 @@ let configURL = docsURL.appendingPathComponent("config.json")
 final class Settings: ObservableObject {
     @Published var network = "off"
     @Published var lanPlayServer = ""
+    @Published var nextendoPid: UInt64 = 0
+    @Published var nextendoName = ""
     @Published var prewarm = true
     @Published var rumble = true
     @Published var rumbleMin = 0.45
@@ -71,6 +73,8 @@ final class Settings: ObservableObject {
         extra = json
         network = json["network"] as? String ?? ((json["lan"] as? Bool ?? false) ? "lan" : "off")
         lanPlayServer = json["lanplay_server"] as? String ?? ""
+        nextendoPid = (json["nextendo_pid"] as? NSNumber)?.uint64Value ?? 0
+        nextendoName = json["nextendo_name"] as? String ?? ""
         prewarm = json["prewarm_pipelines"] as? Bool ?? true
         rumble = json["rumble"] as? Bool ?? true
         rumbleMin = json["rumble_min"] as? Double ?? 0.45
@@ -90,6 +94,9 @@ final class Settings: ObservableObject {
         var json = extra
         json["network"] = network
         json["lanplay_server"] = lanPlayServer
+        json["nextendo_pid"] = NSNumber(value: nextendoPid)
+        json["nextendo_name"] = nextendoName
+        json["nextendo_token"] = nil
         json["lan"] = nil
         json["extra_pads"] = nil
         json["prewarm_pipelines"] = prewarm
@@ -245,6 +252,7 @@ struct LauncherView: View {
     @ObservedObject private var files = Files.shared
     @StateObject private var network = LocalNetwork()
     @State private var error: String?
+    @State private var launching = false
     @State private var picking = false
     @State private var browsingMods = false
     @State private var inspectedMod: Mod?
@@ -283,6 +291,10 @@ struct LauncherView: View {
                         Text("LAN").tag("lan")
                         Text("Online").tag("lanplay")
                         Text("Wireless (nearby)").tag("wireless")
+                        Text("Nextendo").tag("nextendo")
+                    }
+                    if s.network == "nextendo" {
+                        NextendoSignIn(pid: $s.nextendoPid, name: $s.nextendoName)
                     }
                     if s.network == "lanplay" {
                         TextField("Server (host:port)", text: $s.lanPlayServer)
@@ -502,6 +514,8 @@ struct LauncherView: View {
             return "Lan-Play.com clients on the same server can join"
         case "wireless":
             return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        case "nextendo":
+            return "Mario Kart 8 Deluxe online on Nextendo Network servers, with Switch players. Needs a Nextendo account and update 4.0.1"
         default:
             return nil
         }
@@ -524,8 +538,27 @@ struct LauncherView: View {
             return
         }
         do { try s.save() } catch { self.error = "Could not save settings: \(error.localizedDescription)"; return }
-        network.stop()
-        play()
+        guard s.network == "nextendo" else {
+            network.stop()
+            play()
+            return
+        }
+        guard !launching else { return }
+        launching = true
+        Task { @MainActor in
+            defer { launching = false }
+            do {
+                let login = try await Nextendo.gameLogin()
+                s.nextendoPid = login.pid
+                s.nextendoName = login.name
+                try? s.save()
+                setenv("NX_NEXTENDO_TOKEN", login.token, 1)
+                network.stop()
+                play()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -19,7 +19,7 @@ fn entry(g: i32) -> Option<Fd> {
     usize::try_from(g).ok().and_then(|i| FDS.lock().unwrap().get(i).cloned().flatten())
 }
 
-fn host(g: i32) -> Option<i32> {
+pub(super) fn host(g: i32) -> Option<i32> {
     match entry(g) {
         Some(Fd::Host(h)) => Some(h),
         _ => None,
@@ -162,22 +162,22 @@ const EBADF: u32 = 9;
 
 pub struct Bsd(pub &'static str);
 
-fn in_buf(req: &Request, i: usize) -> Option<Buffer> {
+pub(super) fn in_buf(req: &Request, i: usize) -> Option<Buffer> {
     req.a.get(i).filter(|b| b.addr != 0 && b.size != 0).or(req.x.get(i).filter(|b| b.addr != 0)).copied()
 }
 
-fn out_buf(req: &Request, i: usize) -> Option<Buffer> {
+pub(super) fn out_buf(req: &Request, i: usize) -> Option<Buffer> {
     req.b.get(i).filter(|b| b.addr != 0 && b.size != 0).or(req.c.get(i).filter(|b| b.addr != 0)).copied()
 }
 
-fn bytes<'a>(b: Option<Buffer>) -> &'a [u8] {
+pub(super) fn bytes<'a>(b: Option<Buffer>) -> &'a [u8] {
     match b {
         Some(b) if b.addr != 0 => unsafe { std::slice::from_raw_parts(b.addr as *const u8, b.size as usize) },
         _ => &[],
     }
 }
 
-fn bytes_mut<'a>(b: Option<Buffer>) -> &'a mut [u8] {
+pub(super) fn bytes_mut<'a>(b: Option<Buffer>) -> &'a mut [u8] {
     match b {
         Some(b) if b.addr != 0 => unsafe { std::slice::from_raw_parts_mut(b.addr as *mut u8, b.size as usize) },
         _ => &mut [],

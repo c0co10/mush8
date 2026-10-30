@@ -82,6 +82,8 @@ final class Settings: ObservableObject {
     @Published var network = "off"
     @Published var lanInterface = ""
     @Published var lanPlayServer = ""
+    @Published var nextendoPid: UInt64 = 0
+    @Published var nextendoName = ""
     @Published var pipelineArchive = false
     @Published var prewarm = true
     @Published var rumble = true
@@ -114,6 +116,8 @@ final class Settings: ObservableObject {
         dlc = j["dlc"] as? String ?? dlc
         network = j["network"] as? String ?? ((j["lan"] as? Bool ?? false) ? "lan" : "off")
         lanPlayServer = j["lanplay_server"] as? String ?? ""
+        nextendoPid = (j["nextendo_pid"] as? NSNumber)?.uint64Value ?? 0
+        nextendoName = j["nextendo_name"] as? String ?? ""
         lanInterface = j["lan_interface"] as? String ?? ""
         pipelineArchive = j["pipeline_archive"] as? Bool ?? false
         prewarm = j["prewarm_pipelines"] as? Bool ?? true
@@ -142,6 +146,7 @@ final class Settings: ObservableObject {
         let j: [String: Any] = [
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
+            "nextendo_pid": NSNumber(value: nextendoPid), "nextendo_name": nextendoName,
             "prewarm_pipelines": prewarm, "rumble": rumble, "rumble_min": rumbleMin, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
             "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads, "browser_pads": browserPads,
             "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
@@ -150,6 +155,7 @@ final class Settings: ObservableObject {
         try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: configURL)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
         }
     }
 
@@ -162,6 +168,8 @@ final class Settings: ObservableObject {
             if !lanInterface.isEmpty { env["NX_LAN_IF"] = lanInterface }
         case "lanplay":
             env["NX_LANPLAY_SERVER"] = lanPlayServer.trimmingCharacters(in: .whitespaces)
+        case "nextendo":
+            env["NX_NEXTENDO_PID"] = String(nextendoPid)
         default:
             break
         }
@@ -392,6 +400,7 @@ struct LauncherView: View {
     @StateObject private var sys = SystemInfo()
     @StateObject private var prep = Preparer()
     @State private var launchError: String?
+    @State private var launching = false
     @State private var tick = 0
     @State private var copied: String?
     @State private var showMods = false
@@ -473,6 +482,7 @@ struct LauncherView: View {
         case "lan": return "Switch and Mush8 players on the same network can join"
         case "lanplay": return "Lan-Play.com clients on the same server can join"
         case "wireless": return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        case "nextendo": return "Mario Kart 8 Deluxe online on Nextendo Network servers, with Switch players. Needs a Nextendo account and update 4.0.1"
         default: return nil
         }
     }
@@ -484,6 +494,7 @@ struct LauncherView: View {
                 Text("LAN").tag("lan")
                 Text("Online").tag("lanplay")
                 Text("Wireless (nearby)").tag("wireless")
+                Text("Nextendo").tag("nextendo")
             }
             switch s.network {
             case "lan":
@@ -493,6 +504,8 @@ struct LauncherView: View {
                 }
             case "lanplay":
                 TextField("Server", text: $s.lanPlayServer, prompt: Text("host:port"))
+            case "nextendo":
+                NextendoSignIn(pid: $s.nextendoPid, name: $s.nextendoName)
             default:
                 EmptyView()
             }
@@ -666,7 +679,25 @@ struct LauncherView: View {
             return
         }
         s.save()
-        launchError = launch(s, mods: mods)
+        guard s.network == "nextendo" else {
+            launchError = launch(s, mods: mods)
+            return
+        }
+        guard !launching else { return }
+        launching = true
+        Task { @MainActor in
+            defer { launching = false }
+            do {
+                let login = try await Nextendo.gameLogin()
+                s.nextendoPid = login.pid
+                s.nextendoName = login.name
+                s.save()
+                setenv("NX_NEXTENDO_TOKEN", login.token, 1)
+                launchError = launch(s, mods: mods)
+            } catch {
+                launchError = error.localizedDescription
+            }
+        }
     }
 }
 
