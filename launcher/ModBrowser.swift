@@ -369,13 +369,17 @@ struct ModBrowserView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 14) {
-                metaItem(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file), systemImage: "archivebox")
-                if file.downloadCount > 0 {
-                    metaItem(file.downloadCount.formatted(.number.locale(Locale(identifier: "en_US_POSIX"))), systemImage: "arrow.down.to.line")
+                Group {
+                    metaItem(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file), systemImage: "archivebox")
+                    if file.downloadCount > 0 {
+                        metaItem(file.downloadCount.formatted(.number.locale(Locale(identifier: "en_US_POSIX"))), systemImage: "arrow.down.to.line")
+                    }
+                    if let added = relativeDate(file.dateAdded) {
+                        metaItem(added, systemImage: "calendar")
+                    }
                 }
-                if let added = relativeDate(file.dateAdded) {
-                    metaItem(added, systemImage: "calendar")
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if installed {
                     Label("Installed", systemImage: "checkmark.circle.fill")
@@ -396,8 +400,6 @@ struct ModBrowserView: View {
                         .disabled(installing)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
         .padding(16)
         .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
