@@ -138,6 +138,26 @@ pub fn is_tbz(w: u32) -> bool {
 pub fn is_cond_branch(w: u32) -> bool {
     is_bcond(w) || is_cbz(w) || is_tbz(w)
 }
+pub fn bl(from: u64, to: u64) -> Result<u32> {
+    Ok(b(from, to)? | 0x8000_0000)
+}
+pub fn ldrb_w(t: Reg, n: Reg, off: u32) -> u32 {
+    debug_assert!(off < 4096);
+    0x3940_0000 | (off << 10) | (n << 5) | t
+}
+pub fn sub_imm_w(d: Reg, n: Reg, imm: u32) -> u32 {
+    debug_assert!(imm < 4096);
+    0x5100_0000 | (imm << 10) | (n << 5) | d
+}
+pub fn is_b(w: u32) -> bool {
+    w & 0xFC00_0000 == 0x1400_0000
+}
+pub fn is_bl(w: u32) -> bool {
+    w & 0xFC00_0000 == 0x9400_0000
+}
+pub fn branch_target(w: u32, pc: u64) -> u64 {
+    (pc as i64 + sext(w & 0x03FF_FFFF, 26) * 4) as u64
+}
 pub fn cond_target(w: u32, pc: u64) -> u64 {
     let d = if is_tbz(w) { sext((w >> 5) & 0x3FFF, 14) } else { sext((w >> 5) & 0x7FFFF, 19) };
     (pc as i64 + d * 4) as u64

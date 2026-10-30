@@ -57,47 +57,6 @@ func gameCodeReady(in folder: URL, patches: [String]) -> Bool {
     return made.trimmingCharacters(in: .whitespacesAndNewlines) == nxpatchStamps[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-struct Mod: Identifiable {
-    let name: String
-    let romfs: Bool
-    let patches: [String]
-    let replacedModules: Bool
-    var id: String { name }
-
-    var summary: String {
-        var parts: [String] = []
-        if romfs { parts.append("replaces game files") }
-        if !patches.isEmpty { parts.append(patches.count == 1 ? "1 code patch" : "\(patches.count) code patches") }
-        if replacedModules { parts.append("replaced code modules are not supported") }
-        return parts.isEmpty ? "no code patches in exefs" : parts.joined(separator: ", ")
-    }
-}
-
-func caselessChild(_ dir: URL, _ name: String) -> URL? {
-    let fm = FileManager.default
-    var isDir: ObjCBool = false
-    return (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?.first {
-        $0.lastPathComponent.caseInsensitiveCompare(name) == .orderedSame && fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
-    }
-}
-
-func installedMods(in folder: URL) -> [Mod] {
-    let root = folder.appendingPathComponent("mods")
-    guard let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles) else { return [] }
-    return dirs.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-        .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-        .compactMap { dir -> Mod? in
-            let romfs = caselessChild(dir, "romfs")
-            let exefs = caselessChild(dir, "exefs")
-            guard romfs != nil || exefs != nil else { return nil }
-            let files = exefs.flatMap { try? FileManager.default.contentsOfDirectory(atPath: $0.path) }?.filter { !$0.hasPrefix(".") }.sorted() ?? []
-            let patches = files.filter { ["ips", "pchtxt"].contains(($0 as NSString).pathExtension.lowercased()) }
-            let name = dir.lastPathComponent
-            return Mod(name: name, romfs: romfs != nil, patches: patches.map { "mods/\(name)/\(exefs!.lastPathComponent)/\($0)" },
-                       replacedModules: files.contains { ["main", "sdk", "rtld"].contains($0) || $0.hasPrefix("subsdk") })
-        }
-}
-
 func updateSource(_ s: Settings) -> String {
     let url = s.folderURL.appendingPathComponent(s.update).resolvingSymlinksInPath()
     let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
@@ -123,9 +82,12 @@ final class Settings: ObservableObject {
     @Published var network = "off"
     @Published var lanInterface = ""
     @Published var lanPlayServer = ""
+    @Published var nextendoPid: UInt64 = 0
+    @Published var nextendoName = ""
     @Published var pipelineArchive = false
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var rumbleMin = 0.45
     @Published var padDriver = "apple"
     @Published var spatial = true
     @Published var backgroundCompile = true
@@ -154,10 +116,13 @@ final class Settings: ObservableObject {
         dlc = j["dlc"] as? String ?? dlc
         network = j["network"] as? String ?? ((j["lan"] as? Bool ?? false) ? "lan" : "off")
         lanPlayServer = j["lanplay_server"] as? String ?? ""
+        nextendoPid = (j["nextendo_pid"] as? NSNumber)?.uint64Value ?? 0
+        nextendoName = j["nextendo_name"] as? String ?? ""
         lanInterface = j["lan_interface"] as? String ?? ""
         pipelineArchive = j["pipeline_archive"] as? Bool ?? false
         prewarm = j["prewarm_pipelines"] as? Bool ?? true
         rumble = j["rumble"] as? Bool ?? true
+        rumbleMin = j["rumble_min"] as? Double ?? 0.45
         padDriver = j["gamepad_driver"] as? String ?? "apple"
         spatial = j["spatial_audio"] as? Bool ?? true
         backgroundCompile = j["background_compile"] as? Bool ?? true
@@ -175,15 +140,14 @@ final class Settings: ObservableObject {
 
     var folderURL: URL { URL(fileURLWithPath: folder) }
 
-    var enabledMods: [Mod] { installedMods(in: folderURL).filter { !disabledMods.contains($0.name) } }
-
-    var codePatches: [String] { enabledMods.flatMap(\.patches) }
+    func codePatches(_ mods: [Mod]) -> [String] { enabledCodePatches(mods, disabled: disabledMods) }
 
     func save() {
         let j: [String: Any] = [
             "folder": folder, "keys": keys, "base": base, "update": update, "dlc": dlc, "network": network,
             "lan_interface": lanInterface, "lanplay_server": lanPlayServer, "pipeline_archive": pipelineArchive,
-            "prewarm_pipelines": prewarm, "rumble": rumble, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
+            "nextendo_pid": NSNumber(value: nextendoPid), "nextendo_name": nextendoName,
+            "prewarm_pipelines": prewarm, "rumble": rumble, "rumble_min": rumbleMin, "gamepad_driver": padDriver, "spatial_audio": spatial, "background_compile": backgroundCompile, "motion_controls": motion,
             "handheld": handheld, "uhd": uhd, "split60": split60, "phone_pads": phonePads, "browser_pads": browserPads,
             "aspect": fillScreen ? "fill" : "16:9", "hud": hudAtEdges ? "edges" : "center", "hud_scale": hudScale,
             "disabled_mods": disabledMods,
@@ -191,6 +155,7 @@ final class Settings: ObservableObject {
         try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: configURL)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
         }
     }
 
@@ -203,12 +168,15 @@ final class Settings: ObservableObject {
             if !lanInterface.isEmpty { env["NX_LAN_IF"] = lanInterface }
         case "lanplay":
             env["NX_LANPLAY_SERVER"] = lanPlayServer.trimmingCharacters(in: .whitespaces)
+        case "nextendo":
+            env["NX_NEXTENDO_PID"] = String(nextendoPid)
         default:
             break
         }
         if pipelineArchive { env["NX_PIPELINE_ARCHIVE"] = "1" }
         if prewarm { env["NX_PREWARM"] = "1" }
         if !rumble { env["NX_RUMBLE"] = "0" }
+        env["NX_RUMBLE_MIN"] = String(rumbleMin)
         env["NX_PAD_DRIVER"] = padDriver
         if !spatial { env["NX_SPATIAL"] = "0" }
         if !backgroundCompile { env["NX_SYNC_SHADERS"] = "1" }
@@ -223,12 +191,16 @@ final class Settings: ObservableObject {
         return env
     }
 
-    var arguments: [String] {
+    func arguments(_ mods: [Mod]) -> [String] {
         var a = ["--keys", keys, "--base", base, "--update", update]
         if FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(dlc).path) { a += ["--dlc", dlc] }
-        for m in enabledMods where m.romfs { a += ["--mod", "mods/\(m.name)"] }
+        for m in mods where !disabledMods.contains(m.id) && m.romfs && m.loadable { a += ["--mod", m.path] }
         return a
     }
+}
+
+func enabledCodePatches(_ mods: [Mod], disabled: [String]) -> [String] {
+    mods.filter { !disabled.contains($0.id) && $0.loadable }.flatMap(\.patches)
 }
 
 struct Check: Identifiable {
@@ -238,20 +210,19 @@ struct Check: Identifiable {
     var optional = false
 }
 
-func checks(_ s: Settings) -> [Check] {
+func checks(_ s: Settings, mods: [Mod]) -> [Check] {
     let fm = FileManager.default
     let f = s.folderURL
     let has = { (p: String) in fm.fileExists(atPath: f.appendingPathComponent(p).path) }
     let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/heap-segments-v2/index.tsv").path
     let shaders = (try? fm.attributesOfItem(atPath: shaderIndex)[.size] as? Int) ?? nil
-    let mods = installedMods(in: f)
-    let on = mods.filter { !s.disabledMods.contains($0.name) }.count
+    let on = mods.filter { !s.disabledMods.contains($0.id) }.count
     return [
         Check(id: "Base Game", ok: has(s.base), detail: has(s.base) ? s.base : "not found"),
         Check(id: "Update", ok: has(s.update), detail: has(s.update) ? s.update : "not found"),
         Check(id: "Booster Course Pass", ok: has(s.dlc), detail: has(s.dlc) ? s.dlc : "none", optional: true),
         Check(id: "Mods", ok: !mods.isEmpty, detail: mods.isEmpty ? "none" : "\(on) of \(mods.count) on", optional: true),
-        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f, patches: s.codePatches) && preparedSource(in: f) == updateSource(s),
+        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f, patches: s.codePatches(mods)) && preparedSource(in: f) == updateSource(s),
               detail: preparedVersion(in: f).map { "work/v-upd/patched (\($0))" } ?? "work/v-upd/patched"),
         Check(id: "Precompiled shaders", ok: (shaders ?? 0) > 0,
               detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex/heap-segments-v2", optional: shaders == 0),
@@ -265,30 +236,32 @@ final class Preparer: ObservableObject {
     @Published var line = ""
     @Published var error: String?
 
-    func run(_ s: Settings, done: @escaping () -> Void) {
+    func run(_ s: Settings, mods: [Mod], done: @escaping () -> Void) {
         let f = s.folderURL
-        var steps: [(URL, [String])] = []
+        let disabled = s.disabledMods
+        var steps: [(URL, () -> [String])] = []
         let fm = FileManager.default
         if preparedSource(in: f) != updateSource(s) || !fm.fileExists(atPath: f.appendingPathComponent("work/v-upd/exefs/main").path) {
             try? fm.removeItem(at: f.appendingPathComponent("work/v-upd"))
             try? fm.createDirectory(at: f.appendingPathComponent("work/v-upd"), withIntermediateDirectories: true)
             try? updateSource(s).write(to: f.appendingPathComponent("work/v-upd/source"), atomically: true, encoding: .utf8)
-            steps.append((tool("nxfs", in: f), ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]))
+            let extract = ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]
+            steps.append((tool("nxfs", in: f), { extract }))
         }
-        let patches = s.codePatches
-        if !gameCodeReady(in: f, patches: patches) {
-            steps.append((tool("nxpatch", in: f), ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]
-                + patches.flatMap { ["--patch", $0] }))
+        if !gameCodeReady(in: f, patches: s.codePatches(mods)) {
+            steps.append((tool("nxpatch", in: f), { ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]
+                + enabledCodePatches(installedMods(in: f), disabled: disabled).flatMap { ["--patch", $0] } }))
         }
-        steps.append((tool("nxhost", in: f), s.arguments + ["--precompile"]))
+        let precompile = s.arguments(mods) + ["--precompile"]
+        steps.append((tool("nxhost", in: f), { precompile }))
         if s.pipelineArchive { setenv("NX_PIPELINE_ARCHIVE", "1", 1) } else { unsetenv("NX_PIPELINE_ARCHIVE") }
         running = true
         error = nil
         next(steps[...], folder: f, done: done)
     }
 
-    private func next(_ steps: ArraySlice<(URL, [String])>, folder: URL, done: @escaping () -> Void) {
-        guard let (exe, args) = steps.first else {
+    private func next(_ steps: ArraySlice<(URL, () -> [String])>, folder: URL, done: @escaping () -> Void) {
+        guard let (exe, args) = steps.first.map({ ($0.0, $0.1()) }) else {
             running = false
             line = ""
             done()
@@ -314,6 +287,7 @@ final class Preparer: ObservableObject {
                 } else {
                     self.running = false
                     self.error = "\(exe.lastPathComponent) failed: \(self.line)"
+                    done()
                 }
             }
         }
@@ -401,9 +375,9 @@ final class SystemInfo: ObservableObject {
     }
 }
 
-let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:8088"
+let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:2904"
 
-func launch(_ s: Settings) -> String {
+func launch(_ s: Settings, mods: [Mod]) -> String {
     FileManager.default.changeCurrentDirectoryPath(s.folder)
     for (k, v) in s.environment { setenv(k, v, 1) }
     let prevLog = logURL.deletingPathExtension().appendingPathExtension("prev.log")
@@ -416,7 +390,7 @@ func launch(_ s: Settings) -> String {
         close(fd)
     }
     let game = tool("nxhost", in: s.folderURL).path
-    var argv: [UnsafeMutablePointer<CChar>?] = ([game] + s.arguments).map { strdup($0) } + [nil]
+    var argv: [UnsafeMutablePointer<CChar>?] = ([game] + s.arguments(mods)).map { strdup($0) } + [nil]
     execv(game, &argv)
     return "Could not start the game (\(String(cString: strerror(errno))))"
 }
@@ -426,12 +400,15 @@ struct LauncherView: View {
     @StateObject private var sys = SystemInfo()
     @StateObject private var prep = Preparer()
     @State private var launchError: String?
+    @State private var launching = false
     @State private var tick = 0
     @State private var copied: String?
     @State private var showMods = false
+    @State private var mods: [Mod] = []
 
     var body: some View {
-        let list = checks(s)
+        let _ = tick
+        let list = checks(s, mods: mods)
         let ready = list.allSatisfy { $0.ok || $0.optional }
         VStack(spacing: 16) {
             HStack(spacing: 12) {
@@ -441,7 +418,7 @@ struct LauncherView: View {
             }
             Form {
                 if !ready { dataSection(list) }
-                settingsSection
+                settingsSection(list)
                 systemSection
                 if ready { dataSection(list) }
             }
@@ -464,7 +441,13 @@ struct LauncherView: View {
         }
         .padding(20)
         .frame(width: 520, height: 770)
-        .sheet(isPresented: $showMods) { ModsView(s: s) }
+        .sheet(isPresented: $showMods, onDismiss: { tick += 1 }) {
+            ModsView(s: s, onInstalled: { tick += 1 })
+        }
+        .onAppear { mods = installedMods(in: s.folderURL) }
+        .onChange(of: tick) { mods = installedMods(in: s.folderURL) }
+        .onChange(of: s.folder) { mods = installedMods(in: s.folderURL) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in tick += 1 }
     }
 
     func dataSection(_ list: [Check]) -> some View {
@@ -473,16 +456,15 @@ struct LauncherView: View {
                 Text(s.folder.isEmpty ? "No folder chosen" : s.folder).lineLimit(1).truncationMode(.head)
                     .foregroundStyle(s.folder.isEmpty ? .secondary : .primary)
                 Spacer()
-                Button("Choose…", action: chooseFolder)
+                Button("Choose…", action: chooseFolder).disabled(prep.running)
             }
-            ForEach(list) { c in
+            ForEach(list.filter { $0.id != "Mods" }) { c in
                 HStack {
                     Image(systemName: c.ok ? "checkmark.circle.fill" : c.optional ? "minus.circle" : "xmark.circle")
                         .foregroundStyle(c.ok ? .green : c.optional ? .secondary : .red)
                     Text(c.id)
                     Spacer()
                     Text(c.detail).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    if c.id == "Mods" && c.ok { Button("Customize…") { showMods = true } }
                 }
             }
         }
@@ -495,19 +477,78 @@ struct LauncherView: View {
         }
     }
 
-    var settingsSection: some View {
-        Section("Settings") {
+    var multiplayerNote: String? {
+        switch s.network {
+        case "lan": return "Switch and Mush8 players on the same network can join"
+        case "lanplay": return "Lan-Play.com clients on the same server can join"
+        case "wireless": return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        case "nextendo": return "Mario Kart 8 Deluxe online on Nextendo Network servers, with Switch players. Needs a Nextendo account and update 4.0.1"
+        default: return nil
+        }
+    }
+
+    @ViewBuilder func settingsSection(_ list: [Check]) -> some View {
+        Section {
+            Picker("Mode", selection: $s.network) {
+                Text("Off").tag("off")
+                Text("LAN").tag("lan")
+                Text("Online").tag("lanplay")
+                Text("Wireless (nearby)").tag("wireless")
+                Text("Nextendo").tag("nextendo")
+            }
+            switch s.network {
+            case "lan":
+                Picker("Network", selection: $s.lanInterface) {
+                    Text("Automatic").tag("")
+                    ForEach(sys.nets, id: \.self) { n in Text("\(n.name) · \(n.ip)").tag(n.name) }
+                }
+            case "lanplay":
+                TextField("Server", text: $s.lanPlayServer, prompt: Text("host:port"))
+            case "nextendo":
+                NextendoSignIn(pid: $s.nextendoPid, name: $s.nextendoName)
+            default:
+                EmptyView()
+            }
+        } header: {
+            Text("Multiplayer")
+        } footer: {
+            if let note = multiplayerNote { Text(note).font(.caption).foregroundStyle(.secondary) }
+        }
+        Section {
+            Toggle("Remote controllers", isOn: $s.phonePads)
+            if s.phonePads {
+                Toggle("Web controllers", isOn: $s.browserPads)
+                if s.browserPads {
+                    addressRow("Mac's address", phonePadHost)
+                    addressRow("Or by IP", sys.lan.map { "http://\($0):2904" })
+                }
+            }
+        } footer: {
+            Text(s.phonePads && s.browserPads
+                ? "After you press Play, other phones on the same Wi-Fi can open one of these addresses in their browser and join as players. The name stays the same, the IP can change"
+                : "Nearby iPhones can join as players with \"Use as a controller\"")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        if let mods = list.first(where: { $0.id == "Mods" }) {
+            Section("Mods") {
+                HStack {
+                    Text(mods.detail).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Customize…") { showMods = true }
+                        .disabled(s.folder.isEmpty || prep.running)
+                }
+            }
+        }
+        Section {
             Picker("Console mode", selection: Binding(get: { s.handheld ? 2 : s.uhd ? 1 : 0 }, set: { s.handheld = $0 == 2; s.uhd = $0 == 1 })) {
                 Text("Docked (1080p)").tag(0)
                 Text("Docked (4K)").tag(1)
                 Text("Handheld (720p)").tag(2)
             }
             Toggle(isOn: $s.split60) { labeled("60 fps split screen", "3 or 4 players get every screen drawn each frame, needs a fast GPU") }
-            Picker(selection: $s.fillScreen) {
+            Picker("Screen", selection: $s.fillScreen) {
                 Text("16:9").tag(false)
                 Text("Fill screen").tag(true)
-            } label: {
-                labeled("Screen", "Fill screen widens the race to the whole display, menus and HUD keep their proportions")
             }
             if s.fillScreen {
                 Picker("HUD", selection: $s.hudAtEdges) {
@@ -520,53 +561,42 @@ struct LauncherView: View {
                 Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
                 Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
             }
-            Picker(selection: $s.network) {
-                Text("Off").tag("off")
-                Text("LAN").tag("lan")
-                Text("Online").tag("lanplay")
-                Text("Wireless (nearby)").tag("wireless")
-            } label: {
-                labeled("Multiplayer", s.network == "wireless" ? "Nearby Mush8 clients can join (keep Wi-Fi on)" : nil)
-            }
-            switch s.network {
-            case "lan":
-                Picker(selection: $s.lanInterface) {
-                    Text("Automatic").tag("")
-                    ForEach(sys.nets, id: \.self) { n in Text("\(n.name) · \(n.ip)").tag(n.name) }
-                } label: {
-                    labeled("Network", "Switch and Mush8 players on the same network can join")
-                }
-            case "lanplay":
-                TextField(text: $s.lanPlayServer, prompt: Text("host:port")) {
-                    labeled("Server", "Lan-Play.com clients on the same server can join")
-                }
-            default:
-                EmptyView()
-            }
+        } header: {
+            Text("Graphics")
+        } footer: {
+            Text("Handheld renders at 720p: lighter on the GPU and battery. Fill screen widens the race to the whole display")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
             Toggle("Pipeline archive", isOn: $s.pipelineArchive)
             Toggle("Prewarm pipelines", isOn: $s.prewarm)
-            Toggle(isOn: $s.backgroundCompile) { labeled("Background shader compiling", "Builds the game's graphics pipelines in the background at startup") }
+            Toggle("Background shader compiling", isOn: $s.backgroundCompile)
+        } footer: {
+            Text("Builds the game's graphics pipelines in the background at startup").font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
+            Toggle("Spatial audio", isOn: $s.spatial)
+            Toggle("Vibration", isOn: $s.rumble)
+            if s.rumble {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Rumble cutoff")
+                        Slider(value: $s.rumbleMin, in: 0...0.9, step: 0.05)
+                        Text("\(Int((s.rumbleMin * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Text("Controller rumble weaker than this stays off, which stops the constant buzz on Xbox and PlayStation controllers. Switch controllers are not affected")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Toggle("Motion controls", isOn: $s.motion)
             Picker(selection: $s.padDriver) {
                 Text("Apple").tag("apple")
                 Text("SDL").tag("sdl")
             } label: {
                 labeled("Gamepad driver", "SDL supports more controllers, and rumble on more of them. Apple follows the button remapping in System Settings")
             }
-            Toggle("Vibration", isOn: $s.rumble)
-            Toggle("Motion controls", isOn: $s.motion)
-            Toggle(isOn: $s.spatial) {
-                labeled("Spatial audio", "Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
-            }
-            Toggle(isOn: $s.phonePads) { labeled("iPhone controllers", "iPhones on this network join as players with Mush8's \"Use as a controller\"") }
-            if s.phonePads {
-                Toggle(isOn: $s.browserPads) {
-                    labeled("Browser controllers", s.browserPads ? "Phones open an address below in their browser on the same Wi-Fi and join as players, no app needed. The name stays the same, the IP can change" : "Any phone's browser can be a controller, no app needed")
-                }
-                if s.browserPads {
-                    addressRow("Mac's address", phonePadHost)
-                    addressRow("Or by IP", sys.lan.map { "http://\($0):8088" })
-                }
-            }
+        } header: {
+            Text("Audio & controls")
         }
     }
 
@@ -630,41 +660,70 @@ struct LauncherView: View {
 
     func prepare() {
         s.save()
-        prep.run(s) { tick += 1 }
+        mods = installedMods(in: s.folderURL)
+        prep.run(s, mods: mods) { tick += 1 }
     }
 
     func play() {
+        mods = installedMods(in: s.folderURL)
+        guard checks(s, mods: mods).allSatisfy({ $0.ok || $0.optional }) else {
+            launchError = "Your game files or mods changed. Prepare again before playing."
+            return
+        }
+        if let mod = mods.first(where: { !s.disabledMods.contains($0.id) && !$0.loadable }) {
+            launchError = "\(mod.displayTitle) can't load: \(mod.summary). Turn it off in Mods."
+            return
+        }
         if s.network == "lanplay" && s.lanPlayServer.trimmingCharacters(in: .whitespaces).isEmpty {
             launchError = "Enter a LAN-Play server (host:port)"
             return
         }
         s.save()
-        launchError = launch(s)
+        guard s.network == "nextendo" else {
+            launchError = launch(s, mods: mods)
+            return
+        }
+        guard !launching else { return }
+        launching = true
+        Task { @MainActor in
+            defer { launching = false }
+            do {
+                let login = try await Nextendo.gameLogin()
+                s.nextendoPid = login.pid
+                s.nextendoName = login.name
+                s.save()
+                setenv("NX_NEXTENDO_TOKEN", login.token, 1)
+                launchError = launch(s, mods: mods)
+            } catch {
+                launchError = error.localizedDescription
+            }
+        }
     }
 }
 
 struct ModsView: View {
     @ObservedObject var s: Settings
+    let onInstalled: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var mods: [Mod] = []
+    @State private var skipped: [String: String] = [:]
+    @State private var browsing = false
+    @State private var inspectedMod: Mod?
+    @State private var deletingMod: Mod?
+    @State private var actionError: String?
 
     var body: some View {
-        let mods = installedMods(in: s.folderURL)
         VStack(spacing: 12) {
             Form {
                 Section {
+                    if mods.isEmpty {
+                        Text("No mods installed. Browse GameBanana to add one.").foregroundStyle(.secondary)
+                    }
                     ForEach(mods) { m in
-                        Toggle(isOn: Binding(get: { !s.disabledMods.contains(m.name) }, set: { on in
-                            s.disabledMods.removeAll { $0 == m.name }
-                            if !on { s.disabledMods.append(m.name) }
-                        })) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(m.name)
-                                Text(m.summary).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                        ModRow(mod: m, disabled: $s.disabledMods, warning: patchWarning(m, skipped: skipped), inspect: { inspectedMod = m }, delete: { deletingMod = m })
                     }
                 } header: {
-                    Text("Mods")
+                    ModsHeader(mods: mods, disabled: s.disabledMods)
                 } footer: {
                     Text("Mods apply from top to bottom, so a lower mod wins when two mods change the same file. Code patches apply the next time you Prepare.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -673,12 +732,41 @@ struct ModsView: View {
             .formStyle(.grouped)
             HStack {
                 Button("Show in Finder") { NSWorkspace.shared.open(s.folderURL.appendingPathComponent("mods")) }
+                    .disabled(mods.isEmpty)
+                Button("Browse GameBanana…") { browsing = true }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 440, height: 420)
+        .frame(width: 540, height: 420)
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in reload() }
+        .modActions(folder: s.folderURL, inspected: $inspectedMod, deleting: $deletingMod, error: $actionError, delete: deleteMod)
+        .sheet(isPresented: $browsing) {
+            ModBrowserView(folder: s.folderURL) { name in
+                s.disabledMods.removeAll { $0 == name }
+                s.save()
+                mods = installedMods(in: s.folderURL)
+                onInstalled()
+            }
+        }
+    }
+
+    func reload() {
+        mods = installedMods(in: s.folderURL)
+        skipped = skippedPatches(in: s.folderURL)
+    }
+
+    func deleteMod(_ mod: Mod) {
+        deletingMod = nil
+        do {
+            try deleteInstalledMod(mod, in: s.folderURL)
+            s.disabledMods.removeAll { $0 == mod.id }
+            s.save()
+            mods = installedMods(in: s.folderURL)
+            onInstalled()
+        } catch { actionError = error.localizedDescription }
     }
 }
 

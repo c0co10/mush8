@@ -217,6 +217,7 @@ def process(path):
 EXTS = (".rs", ".swift", ".sh", ".c")
 
 
+VENDORED = ("crates/vpx/libvpx/",)
 SKIP_DIRS = {"work", "target", "Firmware", "system", "build", ".git"}
 
 
@@ -250,7 +251,7 @@ def project_files():
         listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], capture_output=True, text=True, check=True).stdout.split("\n")
     except (subprocess.CalledProcessError, FileNotFoundError):
         listed = walk_files(root)
-    return sorted({p for p in listed if p.endswith(EXTS) and ".xcodeproj/" not in p and os.path.isfile(p)})
+    return sorted({p for p in listed if p.endswith(EXTS) and ".xcodeproj/" not in p and not p.startswith(VENDORED) and os.path.isfile(p)})
 
 
 for p in sys.argv[1:] or project_files():

@@ -62,7 +62,8 @@ pub struct Textures {
     aliases: FastMap<TexKey, Vec<Shared<Texture>>>,
     storage: FastMap<TexKey, (u32, Shared<Texture>)>,
     views: FastMap<(TexKey, TexKind, [u32; 4]), Shared<Texture>>,
-    dummies: FastMap<TexKind, Shared<Texture>>,
+    dummies: FastMap<(TexKind, u8), Shared<Texture>>,
+    mismatches: FastMap<(TexKind, u64), ()>,
     samplers: FastMap<[u8; 0x40], Shared<Sampler>>,
     default_sampler: Option<Shared<Sampler>>,
     misses: u64,
@@ -275,8 +276,23 @@ impl Textures {
     }
 
     pub fn dummy(&mut self, kind: TexKind) -> Shared<Texture> {
+        self.filled(kind, 0xFF)
+    }
+
+    pub fn fallback(&mut self, kind: TexKind, tex: &Shared<Texture>) -> Shared<Texture> {
+        let have = tex.0.textureType();
+        if have == kind_type(kind) {
+            return self.dummy(kind);
+        }
+        if self.mismatches.insert((kind, have.0 as u64), ()).is_none() {
+            eprintln!("[gfx] texture type mismatch: shader declares {kind:?}, texture is {have:?} with {} layers; binding zero", tex.0.arrayLength());
+        }
+        self.filled(kind, 0)
+    }
+
+    fn filled(&mut self, kind: TexKind, fill: u8) -> Shared<Texture> {
         self.dummies
-            .entry(kind)
+            .entry((kind, fill))
             .or_insert_with(|| {
                 let d = MTLTextureDescriptor::new();
                 let ty = kind_type(kind);
@@ -295,14 +311,14 @@ impl Textures {
                 }
                 let t = gfx::gpu().device.0.newTextureWithDescriptor(&d).expect("dummy texture");
                 if !kind.is_depth() {
-                    let white = [0xFFu8; 4];
+                    let texel = [fill; 4];
                     for s in 0..slices {
                         unsafe {
                             t.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
                                 region(1, 1, 1),
                                 0,
                                 s,
-                                std::ptr::NonNull::from(&white).cast(),
+                                std::ptr::NonNull::from(&texel).cast(),
                                 4,
                                 4,
                             )

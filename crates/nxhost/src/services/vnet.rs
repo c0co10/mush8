@@ -29,6 +29,7 @@ pub enum Mode {
     Lan,
     LanPlay,
     Wireless,
+    Nextendo,
 }
 
 impl Mode {
@@ -43,11 +44,12 @@ pub fn mode() -> Mode {
         Some("lan") => Mode::Lan,
         Some("lanplay") => Mode::LanPlay,
         Some("wireless") => Mode::Wireless,
+        Some("nextendo") => Mode::Nextendo,
         Some("off") => Mode::Off,
         None if std::env::var_os("NX_LAN").is_some() => Mode::Lan,
         None => Mode::Off,
         Some(other) => {
-            eprintln!("[vnet] unknown NX_NET={other} (off, lan, lanplay, wireless), network off");
+            eprintln!("[vnet] unknown NX_NET={other} (off, lan, lanplay, wireless, nextendo), network off");
             Mode::Off
         }
     })

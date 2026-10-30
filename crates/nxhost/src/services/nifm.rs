@@ -11,7 +11,7 @@ const REQUEST_STATE_ACCEPTED: u32 = 3;
 pub fn lan() -> Option<([u8; 4], [u8; 4])> {
     match vnet::mode() {
         Mode::Off => None,
-        Mode::Lan => host_lan(),
+        Mode::Lan | Mode::Nextendo => host_lan(),
         _ => vnet::network().map(|(addr, mask, _)| (addr, mask)),
     }
 }

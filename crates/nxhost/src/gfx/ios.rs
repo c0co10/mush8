@@ -3,7 +3,7 @@
 use super::{LAYER, Shared, gpu};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, NSObject, NSObjectProtocol};
-use objc2::{ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{ClassType, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::NSString;
 use objc2_metal::MTLPixelFormat;
@@ -37,27 +37,58 @@ pub fn wait_foreground() {
     });
 }
 
-pub(super) fn root_view() -> Option<Retained<UIView>> {
-    UI.with(|ui| ui.borrow().as_ref().and_then(|ui| ui.window.rootViewController()).and_then(|vc| vc.view()))
+pub(super) fn panel_hosts() -> Vec<(Retained<UIView>, bool)> {
+    UI.with(|ui| {
+        let ui = ui.borrow();
+        let Some(ui) = ui.as_ref() else { return Vec::new() };
+        let mut hosts = vec![(ui.root.clone(), false)];
+        hosts.extend(ui.metal.superview().filter(|v| !std::ptr::eq(&**v, &*ui.root)).map(|v| (v, true)));
+        hosts
+    })
 }
 
 pub(super) static CONTROLLER_MODE: AtomicBool = AtomicBool::new(false);
+pub(super) static TV: AtomicBool = AtomicBool::new(false);
+static WAITING: AtomicBool = AtomicBool::new(false);
+const TV_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+static WANT_TOUCH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn tv() -> bool {
+    TV.load(Relaxed)
+}
 
 pub fn set_touch_controls(visible: bool) {
-    dispatch2::DispatchQueue::main().exec_async(move || {
-        if !CONTROLLER_MODE.load(Relaxed) {
-            super::touch::set_visible(visible)
-        }
-    });
+    WANT_TOUCH.store(1 + visible as u8, Relaxed);
+    dispatch2::DispatchQueue::main().exec_async(refresh_touch);
+}
+
+pub fn set_touch_idle(idle: bool) {
+    dispatch2::DispatchQueue::main().exec_async(move || super::touch::set_idle(idle));
+}
+
+fn refresh_touch() {
+    let want = WANT_TOUCH.load(Relaxed);
+    if !CONTROLLER_MODE.load(Relaxed) && want != 0 {
+        super::touch::set_visible(want == 2 || TV.load(Relaxed))
+    }
 }
 
 struct Ui {
     window: Retained<UIWindow>,
+    root: Retained<UIView>,
+    metal: Retained<MetalView>,
     label: Retained<UILabel>,
+    tv: Option<Retained<UIWindow>>,
+    accessory: Option<Retained<NSObject>>,
 }
 
 thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
+    static PENDING_TV: RefCell<Option<Retained<UIWindowScene>>> = const { RefCell::new(None) };
+}
+
+fn is_tv(session: &UISceneSession) -> bool {
+    session.role().isEqualToString(unsafe { UIWindowSceneSessionRoleExternalDisplayNonInteractive })
 }
 
 define_class!(
@@ -115,20 +146,35 @@ define_class!(
 
     unsafe impl UISceneDelegate for SceneDelegate {
         #[unsafe(method(scene:willConnectToSession:options:))]
-        fn will_connect(&self, scene: &UIScene, _session: &UISceneSession, _options: &UISceneConnectionOptions) {
-            if let Some(scene) = scene.downcast_ref::<UIWindowScene>() {
+        fn will_connect(&self, scene: &UIScene, session: &UISceneSession, _options: &UISceneConnectionOptions) {
+            let Some(scene) = scene.downcast_ref::<UIWindowScene>() else { return };
+            eprintln!("[scene] {} connected", session.role());
+            if is_tv(session) {
+                attach_tv(scene, self.mtm());
+            } else {
                 connect(scene, self.mtm());
             }
         }
 
+        #[unsafe(method(sceneDidDisconnect:))]
+        fn did_disconnect(&self, scene: &UIScene) {
+            if is_tv(&scene.session()) {
+                detach_tv();
+            }
+        }
+
         #[unsafe(method(sceneDidEnterBackground:))]
-        fn did_enter_background(&self, _scene: &UIScene) {
-            set_active(false);
+        fn did_enter_background(&self, scene: &UIScene) {
+            if !is_tv(&scene.session()) {
+                set_active(false);
+            }
         }
 
         #[unsafe(method(sceneWillEnterForeground:))]
-        fn will_enter_foreground(&self, _scene: &UIScene) {
-            set_active(true);
+        fn will_enter_foreground(&self, scene: &UIScene) {
+            if !is_tv(&scene.session()) {
+                set_active(true);
+            }
         }
     }
 );
@@ -166,26 +212,101 @@ fn text_label(mtm: MainThreadMarker, frame: CGRect, text: &str) -> Retained<UILa
 }
 
 fn connect(scene: &UIWindowScene, mtm: MainThreadMarker) {
+    if UI.with(|ui| ui.borrow().is_some()) {
+        eprintln!("[scene] Mush8 is already open in another window: closing this one");
+        UIApplication::sharedApplication(mtm).requestSceneSessionDestruction_options_errorHandler(&scene.session(), None, None);
+        return;
+    }
     let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
     let frame = UICoordinateSpace::bounds(&*window);
-    let (view, layer) = metal_view(scene, &window, mtm);
+    let (metal, layer) = metal_view(scene, &window, mtm);
     let _ = LAYER.set(Shared(layer));
+    metal.setAutoresizingMask(UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight);
 
+    let root = UIView::initWithFrame(UIView::alloc(mtm), frame);
+    root.setBackgroundColor(Some(&UIColor::blackColor()));
+    root.addSubview(&metal);
     let label = text_label(mtm, frame, "Starting…");
-    super::touch::install(&view, mtm);
-    view.addSubview(&label);
+    super::touch::install(&root, mtm);
+    root.addSubview(&label);
 
     let vc: Retained<ViewController> = unsafe { msg_send![ViewController::alloc(mtm), init] };
-    vc.setView(Some(&view));
+    vc.setView(Some(&root));
     window.setRootViewController(Some(&vc));
     window.makeKeyAndVisible();
-    UI.with(|ui| *ui.borrow_mut() = Some(Ui { window, label }));
+    let accessory = register_tv(&vc, mtm);
+    UI.with(|ui| *ui.borrow_mut() = Some(Ui { window, root, metal, label, tv: None, accessory }));
+    if let Some(tv) = PENDING_TV.take() {
+        attach_tv(&tv, mtm);
+    }
 
     unsafe extern "C" {
         fn mush8_show_launcher(view_controller: *mut std::ffi::c_void, play: extern "C" fn(), controller: extern "C" fn());
     }
     let vc = Retained::as_ptr(&vc) as usize;
     dispatch2::DispatchQueue::main().exec_async(move || unsafe { mush8_show_launcher(vc as *mut _, play, controller) });
+}
+
+fn register_tv(vc: &ViewController, mtm: MainThreadMarker) -> Option<Retained<NSObject>> {
+    let class = AnyClass::get(c"UISceneAccessory")?;
+    let role = unsafe { UIWindowSceneSessionRoleExternalDisplayNonInteractive };
+    let config = UISceneConfiguration::initWithName_sessionRole(UISceneConfiguration::alloc(mtm), Some(&NSString::from_str("TV")), role);
+    unsafe { config.setDelegateClass(Some(SceneDelegate::class())) };
+    let accessory: Retained<NSObject> = unsafe { msg_send![class, externalNonInteractiveSceneAccessoryWithConfiguration: &*config] };
+    let registration: Retained<NSObject> = unsafe { msg_send![vc, registerSceneAccessory: &*accessory] };
+    eprintln!("[tv] registered for external displays");
+    Some(registration)
+}
+
+fn attach_tv(scene: &UIWindowScene, mtm: MainThreadMarker) {
+    if UI.with(|ui| ui.borrow().is_none()) {
+        PENDING_TV.set(Some(scene.retain()));
+        return;
+    }
+    let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
+    let host = UIView::initWithFrame(UIView::alloc(mtm), UICoordinateSpace::bounds(&*window));
+    host.setBackgroundColor(Some(&UIColor::blackColor()));
+    let vc: Retained<ViewController> = unsafe { msg_send![ViewController::alloc(mtm), init] };
+    vc.setView(Some(&host));
+    window.setRootViewController(Some(&vc));
+    window.setHidden(false);
+    let size = UICoordinateSpace::bounds(&*window).size;
+    eprintln!("[tv] external display connected ({}x{} @{}x): the game moves there, this phone becomes a controller", size.width, size.height, scene.screen().nativeScale());
+    UI.with(|ui| {
+        let mut ui = ui.borrow_mut();
+        let Some(ui) = ui.as_mut() else { return };
+        move_game(ui, &host, scene.screen().nativeScale());
+        ui.tv = Some(window);
+    });
+    TV.store(true, Relaxed);
+    refresh_touch();
+    if WAITING.swap(false, Relaxed) {
+        start();
+    }
+}
+
+fn detach_tv() {
+    PENDING_TV.set(None);
+    UI.with(|ui| {
+        let mut ui = ui.borrow_mut();
+        let Some(ui) = ui.as_mut() else { return };
+        if ui.tv.take().is_none() {
+            return;
+        }
+        eprintln!("[tv] external display gone: the game is back on the phone");
+        let scale = ui.window.windowScene().map_or(1.0, |s| s.screen().nativeScale());
+        let root = ui.root.clone();
+        move_game(ui, &root, scale);
+    });
+    TV.store(false, Relaxed);
+    refresh_touch();
+}
+
+fn move_game(ui: &Ui, host: &UIView, scale: f64) {
+    ui.metal.removeFromSuperview();
+    ui.metal.setFrame(host.bounds());
+    ui.metal.setContentScaleFactor(scale);
+    host.insertSubview_atIndex(&ui.metal, 0);
 }
 
 extern "C" fn controller() {
@@ -201,8 +322,35 @@ extern "C" fn play() {
     if let Some(mtm) = MainThreadMarker::new() {
         UIApplication::sharedApplication(mtm).setIdleTimerDisabled(true);
     }
+    let available = UI.with(|ui| {
+        ui.borrow().as_ref().is_some_and(|ui| ui.tv.is_none() && ui.accessory.as_ref().is_some_and(|r| unsafe { msg_send![&**r, isAvailable] }))
+    });
+    if available {
+        eprintln!("[tv] an external display is coming: waiting for it before sizing the screen");
+        WAITING.store(true, Relaxed);
+        let fallback = dispatch2::DispatchTime::try_from(TV_WAIT).map(|t| {
+            dispatch2::DispatchQueue::main().after(t, || {
+                if WAITING.swap(false, Relaxed) {
+                    start();
+                }
+            })
+        });
+        if matches!(fallback, Ok(Ok(()))) {
+            return;
+        }
+        WAITING.store(false, Relaxed);
+    }
+    start();
+}
+
+fn start() {
     UI.with(|ui| {
         if let Some(ui) = ui.borrow().as_ref() {
+            if let Some(tv) = &ui.tv {
+                let size = UICoordinateSpace::bounds(&**tv).size;
+                crate::aspect::set_screen(size.width, size.height, size.width);
+                return;
+            }
             let size = UICoordinateSpace::bounds(&*ui.window).size;
             let inset = ui.window.safeAreaInsets();
             let (long, short, edge) = if size.width >= size.height {

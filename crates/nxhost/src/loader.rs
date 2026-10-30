@@ -241,6 +241,7 @@ fn net_mode() -> u8 {
         Ok("lan") => 1,
         Ok("lanplay") => 2,
         Ok("wireless") => 3,
+        Ok("nextendo") => keypage::NET_NEXTENDO,
         Ok(_) => 0,
         Err(_) => std::env::var("NX_LAN").is_ok_and(|v| v == "1") as u8,
     }

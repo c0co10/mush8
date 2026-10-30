@@ -24,22 +24,43 @@ func nspKind(_ url: URL) -> String? {
     }
 }
 
+func lanIP() -> String? {
+    var list: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&list) == 0, let first = list else { return nil }
+    defer { freeifaddrs(list) }
+    var found: [String: String] = [:]
+    for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        let a = p.pointee
+        guard let addr = a.ifa_addr, addr.pointee.sa_family == sa_family_t(AF_INET), a.ifa_flags & UInt32(IFF_UP) != 0 else { continue }
+        let name = String(cString: a.ifa_name)
+        let ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { String(cString: inet_ntoa($0.pointee.sin_addr)) }
+        if found[name] == nil { found[name] = ip }
+    }
+    if let wifi = found["en0"] { return wifi }
+    return found.filter { $0.key.hasPrefix("bridge") }.sorted { $0.key < $1.key }.first?.value
+}
+
 let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 let configURL = docsURL.appendingPathComponent("config.json")
 
 final class Settings: ObservableObject {
     @Published var network = "off"
     @Published var lanPlayServer = ""
+    @Published var nextendoPid: UInt64 = 0
+    @Published var nextendoName = ""
     @Published var prewarm = true
     @Published var rumble = true
+    @Published var rumbleMin = 0.45
     @Published var spatial = true
     @Published var backgroundCompile = true
     @Published var motion = false
     @Published var handheld = true
     @Published var phonePads = false
+    @Published var browserPads = false
     @Published var fillScreen = true
     @Published var hudAtEdges = true
     @Published var hudScale = 1.0
+    @Published var disabledMods: [String] = []
     var extra: [String: Any] = [:]
     private var autosave: AnyCancellable?
 
@@ -52,35 +73,46 @@ final class Settings: ObservableObject {
         extra = json
         network = json["network"] as? String ?? ((json["lan"] as? Bool ?? false) ? "lan" : "off")
         lanPlayServer = json["lanplay_server"] as? String ?? ""
+        nextendoPid = (json["nextendo_pid"] as? NSNumber)?.uint64Value ?? 0
+        nextendoName = json["nextendo_name"] as? String ?? ""
         prewarm = json["prewarm_pipelines"] as? Bool ?? true
         rumble = json["rumble"] as? Bool ?? true
+        rumbleMin = json["rumble_min"] as? Double ?? 0.45
         spatial = json["spatial_audio"] as? Bool ?? true
         backgroundCompile = json["background_compile"] as? Bool ?? true
         motion = json["motion_controls"] as? Bool ?? false
         handheld = json["handheld"] as? Bool ?? true
         phonePads = json["phone_pads"] as? Bool ?? false
+        browserPads = json["browser_pads"] as? Bool ?? false
         fillScreen = json["aspect"] as? String != "16:9"
         hudAtEdges = json["hud"] as? String != "center"
         hudScale = json["hud_scale"] as? Double ?? 1.0
+        disabledMods = json["disabled_mods"] as? [String] ?? []
     }
 
     func save() throws {
         var json = extra
         json["network"] = network
         json["lanplay_server"] = lanPlayServer
+        json["nextendo_pid"] = NSNumber(value: nextendoPid)
+        json["nextendo_name"] = nextendoName
+        json["nextendo_token"] = nil
         json["lan"] = nil
         json["extra_pads"] = nil
         json["prewarm_pipelines"] = prewarm
         json["rumble"] = rumble
+        json["rumble_min"] = rumbleMin
         json["spatial_audio"] = spatial
         json["background_compile"] = backgroundCompile
         json["motion"] = nil
         json["motion_controls"] = motion
         json["handheld"] = handheld
         json["phone_pads"] = phonePads
+        json["browser_pads"] = browserPads
         json["aspect"] = fillScreen ? "fill" : "16:9"
         json["hud"] = hudAtEdges ? "edges" : "center"
         json["hud_scale"] = hudScale
+        json["disabled_mods"] = disabledMods
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: configURL)
     }
@@ -220,7 +252,13 @@ struct LauncherView: View {
     @ObservedObject private var files = Files.shared
     @StateObject private var network = LocalNetwork()
     @State private var error: String?
+    @State private var launching = false
     @State private var picking = false
+    @State private var browsingMods = false
+    @State private var inspectedMod: Mod?
+    @State private var deletingMod: Mod?
+    @State private var modActionError: String?
+    @State private var mods: [Mod] = []
     @State private var memory = os_proc_available_memory()
     @Environment(\.scenePhase) private var phase
     let play: () -> Void
@@ -236,7 +274,7 @@ struct LauncherView: View {
                 } else {
                     importView
                 }
-                Button("Use as a controller for a Mac") {
+                Button("Use as a controller") {
                     network.stop()
                     controller()
                 }
@@ -247,26 +285,20 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity)
             Form {
                 if !files.ready { gameFilesSection }
-                Section("Multiplayer") {
+                Section {
                     Picker("Mode", selection: $s.network) {
                         Text("Off").tag("off")
                         Text("LAN").tag("lan")
                         Text("Online").tag("lanplay")
                         Text("Wireless (nearby)").tag("wireless")
+                        Text("Nextendo").tag("nextendo")
                     }
-                    switch s.network {
-                    case "lan":
-                        caption(broadcastAvailable()
-                                ? "Switch and Mush8 players on the same network can join"
-                                : "Mush8 players on the same network can join")
-                    case "lanplay":
+                    if s.network == "nextendo" {
+                        NextendoSignIn(pid: $s.nextendoPid, name: $s.nextendoName)
+                    }
+                    if s.network == "lanplay" {
                         TextField("Server (host:port)", text: $s.lanPlayServer)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        caption("Lan-Play.com clients on the same server can join")
-                    case "wireless":
-                        caption("Nearby Mush8 clients can join (keep Wi-Fi on)")
-                    default:
-                        EmptyView()
                     }
                     if network.denied && usesLocalNetwork {
                         Text("Local network access was denied : other players can't be reached")
@@ -275,28 +307,31 @@ struct LauncherView: View {
                             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                         }.font(.caption)
                     }
-                    Toggle("Vibration", isOn: $s.rumble)
-                    Toggle("Motion controls", isOn: $s.motion)
+                } header: {
+                    Text("Multiplayer")
+                } footer: {
+                    if let note = multiplayerNote { Text(note) }
                 }
                 Section {
-                    Toggle("Spatial audio", isOn: $s.spatial)
+                    Toggle("Remote controllers", isOn: $s.phonePads)
+                    if s.phonePads {
+                        Toggle("Web controllers", isOn: $s.browserPads)
+                        if s.browserPads {
+                            LabeledContent("Address", value: lanIP().map { "http://\($0):2904" } ?? "no Wi-Fi")
+                                .textSelection(.enabled)
+                        }
+                    }
                 } footer: {
-                    Text("Plays the game's 5.1 mix in spatial audio. Choose Fixed or Head Tracked for AirPods in Control Center")
+                    Text(s.phonePads && s.browserPads
+                        ? "After you press Play, other phones on the same Wi-Fi can open this address in their browser and join as players. The IP can change"
+                        : "Nearby iPhones can join as players with \"Use as a controller\"")
                 }
-                Section {
-                    Toggle("iPhone controllers", isOn: $s.phonePads)
-                } footer: {
-                    Text("Nearby iPhones can join as players with \"Use as a controller\"")
-                }
+                modsSection
                 Section {
                     Picker("Console mode", selection: $s.handheld) {
                         Text("Docked (1080p)").tag(false)
                         Text("Handheld (720p)").tag(true)
                     }
-                } footer: {
-                    Text("Handheld renders at 720p: lighter on the GPU and battery")
-                }
-                Section {
                     Picker("Screen", selection: $s.fillScreen) {
                         Text("16:9").tag(false)
                         Text("Fill screen").tag(true)
@@ -312,14 +347,32 @@ struct LauncherView: View {
                         Slider(value: $s.hudScale, in: 0.5...1.5, step: 0.05)
                         Text("\(Int((s.hudScale * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("Graphics")
                 } footer: {
-                    Text("Fill screen widens the race to the whole display, menus and HUD keep their proportions")
+                    Text("Handheld renders at 720p: lighter on the GPU and battery. Fill screen widens the race to the whole display")
                 }
                 Section {
                     Toggle("Prewarm pipelines", isOn: $s.prewarm)
                     Toggle("Background shader compiling", isOn: $s.backgroundCompile)
                 } footer: {
                     Text("Builds the game's graphics pipelines in the background at startup")
+                }
+                Section {
+                    Toggle("Spatial audio", isOn: $s.spatial)
+                    Toggle("Vibration", isOn: $s.rumble)
+                    if s.rumble {
+                        HStack {
+                            Text("Rumble cutoff")
+                            Slider(value: $s.rumbleMin, in: 0...0.9, step: 0.05)
+                            Text("\(Int((s.rumbleMin * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                    Toggle("Motion controls", isOn: $s.motion)
+                } header: {
+                    Text("Audio & controls")
+                } footer: {
+                    Text("Controller rumble weaker than the cutoff stays off, which stops the constant buzz on Xbox and PlayStation controllers. The phone and Switch controllers are not affected")
                 }
                 Section {
                     HStack {
@@ -342,19 +395,69 @@ struct LauncherView: View {
         .fileImporter(isPresented: $picking, allowedContentTypes: [.data, .folder], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { files.copy(urls) }
         }
+        .fullScreenCover(isPresented: $browsingMods, onDismiss: { mods = installedMods(in: docsURL) }) {
+            ModBrowserView(folder: docsURL) { name in
+                s.disabledMods.removeAll { $0 == name }
+                do { try s.save() } catch { self.error = "Could not save settings: \(error.localizedDescription)" }
+                mods = installedMods(in: docsURL)
+            }
+        }
+        .modActions(folder: docsURL, inspected: $inspectedMod, deleting: $deletingMod, error: $modActionError, delete: deleteMod)
         .onAppear {
             files.scan()
+            mods = installedMods(in: docsURL)
             if usesLocalNetwork { network.request() }
         }
         .onChange(of: s.network) { if usesLocalNetwork { network.request() } }
         .onChange(of: s.phonePads) { if usesLocalNetwork { network.request() } }
-        .onChange(of: phase) { _, p in if p == .active { files.scan() } }
+        .onChange(of: phase) { _, p in
+            if p == .active {
+                files.scan()
+                mods = installedMods(in: docsURL)
+            }
+        }
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+
+    var modsSection: some View {
+        Section {
+            Button {
+                browsingMods = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "globe")
+                    Text("Browse GameBanana…").fontWeight(.medium)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+            }
+            .disabled(files.copying != nil)
+            if mods.isEmpty {
+                Text("No mods installed.").foregroundStyle(.secondary)
+            }
+            ForEach(mods) { mod in
+                ModRow(mod: mod, disabled: $s.disabledMods, inspect: { inspectedMod = mod }, delete: { deletingMod = mod })
+            }
+        } header: {
+            ModsHeader(mods: mods, disabled: s.disabledMods)
+        } footer: {
+            Text("Swipe to delete; long press for files. Lower mods win conflicts. RomFS loads on Play; code patches don't run on iOS.")
+        }
+    }
+
+    func deleteMod(_ mod: Mod) {
+        deletingMod = nil
+        do {
+            try deleteInstalledMod(mod, in: docsURL)
+            s.disabledMods.removeAll { $0 == mod.id }
+            mods = installedMods(in: docsURL)
+            try s.save()
+        } catch { modActionError = error.localizedDescription }
     }
 
     var gameFilesSection: some View {
@@ -403,20 +506,59 @@ struct LauncherView: View {
         #endif
     }
 
-    var usesLocalNetwork: Bool { s.network == "lan" || s.network == "wireless" || s.phonePads }
-
-    func caption(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
+    var multiplayerNote: String? {
+        switch s.network {
+        case "lan":
+            return broadcastAvailable() ? "Switch and Mush8 players on the same network can join" : "Mush8 players on the same network can join"
+        case "lanplay":
+            return "Lan-Play.com clients on the same server can join"
+        case "wireless":
+            return "Nearby Mush8 clients can join (keep Wi-Fi on)"
+        case "nextendo":
+            return "Mario Kart 8 Deluxe online on Nextendo Network servers, with Switch players. Needs a Nextendo account and update 4.0.1"
+        default:
+            return nil
+        }
     }
 
+    var usesLocalNetwork: Bool { s.network == "lan" || s.network == "wireless" || s.phonePads }
+
     func start() {
+        let enabled = installedMods(in: docsURL).filter { !s.disabledMods.contains($0.id) }
+        if let mod = enabled.first(where: { !$0.loadable }) {
+            error = "\(mod.displayTitle) can't load: \(mod.summary). Turn it off in Mods."
+            return
+        }
+        if let mod = enabled.first(where: { !$0.patches.isEmpty }) {
+            error = "\(mod.displayTitle) has code patches, which don't run on iOS. Turn it off in Mods."
+            return
+        }
         if s.network == "lanplay" && s.lanPlayServer.trimmingCharacters(in: .whitespaces).isEmpty {
             error = "Enter a LAN-Play server (host:port)"
             return
         }
         do { try s.save() } catch { self.error = "Could not save settings: \(error.localizedDescription)"; return }
-        network.stop()
-        play()
+        guard s.network == "nextendo" else {
+            network.stop()
+            play()
+            return
+        }
+        guard !launching else { return }
+        launching = true
+        Task { @MainActor in
+            defer { launching = false }
+            do {
+                let login = try await Nextendo.gameLogin()
+                s.nextendoPid = login.pid
+                s.nextendoName = login.name
+                try? s.save()
+                setenv("NX_NEXTENDO_TOKEN", login.token, 1)
+                network.stop()
+                play()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -441,4 +583,13 @@ public func mush8ShowLauncher(_ viewController: UnsafeMutableRawPointer, _ play:
     door.host = host
     host.modalPresentationStyle = .fullScreen
     parent.present(host, animated: false)
+}
+
+@_cdecl("mush8_each_mod")
+public func mush8EachMod(_ context: UnsafeMutableRawPointer, _ callback: @convention(c) (UnsafeMutableRawPointer, UnsafePointer<CChar>) -> Void) {
+    let json = (try? Data(contentsOf: configURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let disabled = json?["disabled_mods"] as? [String] ?? []
+    for mod in installedMods(in: docsURL) where !disabled.contains(mod.id) && mod.romfs && mod.loadable {
+        docsURL.appendingPathComponent(mod.path).path.withCString { callback(context, $0) }
+    }
 }

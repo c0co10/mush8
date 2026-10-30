@@ -8,10 +8,26 @@ pub mod overlay;
 mod touch;
 
 #[cfg(target_os = "ios")]
-pub use ios::{run_app, set_touch_controls, wait_foreground};
+pub use ios::{run_app, set_touch_controls, set_touch_idle, tv, wait_foreground};
 
 #[cfg(target_os = "macos")]
 pub fn set_touch_controls(_visible: bool) {}
+
+#[cfg(target_os = "macos")]
+pub fn tv() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub fn touch_idle() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_touch_idle(_idle: bool) {}
+
+#[cfg(target_os = "ios")]
+pub use touch::idle as touch_idle;
 
 #[cfg(target_os = "macos")]
 pub fn wait_foreground() {}
@@ -509,7 +525,11 @@ pub fn present(tex: Option<&Texture>, flip: bool) {
     let Some(layer) = LAYER.get() else { return };
     let bounds = layer.0.bounds().size;
     let scale = layer.0.contentsScale();
-    let size = CGSize { width: (bounds.width * scale).round().max(1.0), height: (bounds.height * scale).round().max(1.0) };
+    let mut size = CGSize { width: (bounds.width * scale).round().max(1.0), height: (bounds.height * scale).round().max(1.0) };
+    if tv() {
+        let fit = (TV_MAX.0 / size.width).min(TV_MAX.1 / size.height).min(1.0);
+        size = CGSize { width: (size.width * fit).round().max(1.0), height: (size.height * fit).round().max(1.0) };
+    }
     if layer.0.drawableSize() != size {
         layer.0.setDrawableSize(size);
     }
@@ -546,6 +566,8 @@ pub fn present(tex: Option<&Texture>, flip: bool) {
     }
     cb.commit();
 }
+
+const TV_MAX: (f64, f64) = (1920.0, 1080.0);
 
 static ASPECT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

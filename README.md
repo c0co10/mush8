@@ -17,7 +17,7 @@ Because Nintendo ninjas are always watching, you will need your own dump :
 - a `Firmware` folder dumped from your Switch (fonts, Miis)
 - optionally, the Booster Course Pass, named `dlc.nsp`
 
-Mush8 will then asks for them : on macOS pick the folder holding them in the launcher, on iOS import them from the app (or copy them in Files → On My iPhone → Mush8). File names don't matter, except for the Booster Course Pass : the macOS launcher remembers the last names it found, so name it `dlc.nsp` to be sure it is found
+Mush8 will then asks for them : on macOS pick the folder holding them in the launcher, on iOS import them from the app (or copy them in Files → On My iPhone → Mush8)
 
 ## Requirements
 - Apple Silicon Mac, macOS 14 or later
@@ -32,11 +32,11 @@ For iOS, also :
 - a device on iOS/macOS 26 or later, with 6 GB of RAM or more (8 GB is comfy)
 
 ## Building
-The easy way :
+the easy way :
 ```
 ./build.sh
 ```
-It installs what's missing (Homebrew, Rust...), then asks whether you want the Mac or the iOS version and walks you through the rest. The Mac `.app` ends up in `~/Downloads/Mush8Output`, the iOS one goes straight to your plugged-in iPhone / iPad
+The script (should) installs what's missing (Homebrew, Rust...), then asks whether you want the Mac or the iOS version and walks you through the rest. The Mac `.app` ends up in `~/Downloads/Mush8Output`, the iOS one goes straight to your plugged-in iPhone / iPad
 
 By hand, macOS :
 ```
@@ -50,7 +50,7 @@ iOS :
 ```
 The signing team is taken from the account signed into Xcode (Settings > Accounts), `TEAM=<your team id>` overrides it, `BUNDLE_ID` sets your own app id, `FREE=1` signs with the entitlements a free account can get. The first build compiles every shader for iOS, so it takes a while
 
-Or make an `.ipa` to install with AltStore / SideStore (no signing needed on the Mac) :
+Or make an `.ipa` to install with AltStore / SideStore :
 ```
 ./make-ios.sh --ipa
 ```
@@ -66,29 +66,30 @@ They need no game files and no controller
 Pick a mode in the launcher, under Multiplayer :
 - LAN : players on the same network, a Switch can join too
 - Online : any lan-play.com server (`host:port`), Switches on that server included
-- Wireless : nearby Mush8 players, no router needed (keep Wi-Fi on)
+- Wireless : nearby Mush8 players
+- Nextendo : Mario Kart 8 Deluxe online on the [Nextendo Network](https://nextendo.network) servers, with Switch players using [Prelude-Nextendo](https://github.com/NextendoNetwork/Prelude-Nextendo). Sign in with your Nextendo account under Multiplayer (on nextendo.network, Mush8 never sees your password). Needs update 4.0.1. In this mode the game's own Online button and online ghost options come back, and Local Wireless becomes LAN
 
-In the game, the main menu then shows LAN Play, Online Play or Wireless Play
+In Nextendo mode the game can only look up Nextendo's servers : every other name is blocked, and TLS is only accepted from Nextendo's addresses. Mush8 keeps your sign-in in the Keychain and sends its game token only to Nextendo. Online races are peer to peer, so other players see your IP address, and the game's code runs unsandboxed on your device, so only play with people you trust if you're worried about that
 
 ## Controls
-Any controller works (Switch Pro, Joy-Con, DualSense, Xbox...), each one is a player. On macOS the keyboard works too (WASD stick, arrows d-pad, X/Return A, Z/Backspace B, Q/E L/R, 1/3 ZL/ZR, Tab +), on iOS there are touch controls when no controller is connected
+Any controller normally works (Switch Pro, Joy-Con, DualSense, Xbox...). On macOS the keyboard works too (WASD stick, arrows d-pad, X/Return A, Z/Backspace B, Q/E L/R, 1/3 ZL/ZR, Tab +), on iOS there are touch controls when no controller is connected
 
-The touchscreen works too : tap the game on iOS, click it on macOS
+An iPhone can be a controller too : open Mush8 on it and tap "Use as a controller". It finds the other Mush8 instance on the same Wi-Fi and joins as the next player
 
-Motion controls (gyro steering) are off by default, turn them on in the launcher
-
-An iPhone can be a controller too : open Mush8 on it and tap "Use as a controller for a Mac" (no game files needed). It finds the Mac running Mush8 on the same Wi-Fi and joins as the next player with its touch controls (and its motion, if Motion controls is on in the Mac launcher). Turn "iPhone controllers" on in the Mac launcher (it is by default), or on an iPad playing the game
+Any browser can be a controller too : turn "Remote controller" and "Browser controllers" on in the launcher and the address shown on the other device
 
 On macOS, if your controller or a part of it (for example rumble) does not work, set "Gamepad driver" to SDL in the launcher
 
-Any phone's browser can be a controller too, no app needed (Android included) : turn "Browser controllers" on in the Mac launcher (it is off by default) and open one of the two addresses shown there on the phone (same Wi-Fi). Each phone joins as the next player. Hold the phone sideways and pick a layout at the top :
-- Normal : every button, for the menus
-- Drive : steering, item, drift and a small A for the start, made for the game's auto-accelerate. The stick stays in place (Fixed) or appears under your thumb (Floating)
-
-Add the page to the home screen (Share → Add to Home Screen) to get rid of the address bar
-
 ## Mods
-Mush8 loads mods from a `mods` folder in the same folder as your game files. This works on macOS only for now. Each mod is a folder inside `mods`, and it must contain a `romfs` folder, an `exefs` folder, or both. Mush8 ignores other folders. In the launcher, use Game data → Mods → Customize to turn each mod on or off
+Mush8 loads mods from `mods` inside the selected game files folder on macOS, or the app's Documents folder on iOS. Open Game data → Mods → Customize on macOS, or the launcher's Mods section on iOS. Mods load in name order; later mods win file conflicts.
+
+Use Browse GameBanana to search Mario Kart 8 Deluxe mods by name, section, URL or ID, then choose a file to download and install. The app supports ZIP, 7z and RAR, displays download progress, and supports cancellation. Existing mods are not overwritten. Downloads are limited to 512 MiB and extraction to 2 GiB / 20,000 entries. The flow was informed by [SimpleModDownloader](https://github.com/PoloNX/SimpleModDownloader).
+
+Each mod can contain `romfs` / `exefs` directly or use `atmosphere/contents/0100152000022000/`, `contents/0100152000022000/`, or `0100152000022000/`. IPS/pchtxt patches in `atmosphere/exefs_patches/<patchset>/` or `exefs_patches/<patchset>/` share that mod's toggle. A top-level `atmosphere` folder is loaded last with its own toggle.
+
+On iOS, swipe a mod for file inspection or deletion; long-press also opens its context menu. On macOS, use the context menu. Deletion requires confirmation. The shared top-level `atmosphere` folder is read-only here because it may contain other games' files.
+
+iOS supports RomFS-only mods; code patches require rebuilding on a Mac. On macOS, run Prepare after changing code patches, which must match the game's NSO build ID. ARM32 code, replacement ExeFS modules, Skyline NRO plugins, packed `exefs.nsp` / `romfs.bin`, and `.stub` removal are unsupported. Use mods compatible with your game update; a supported folder layout alone does not establish gameplay compatibility.
 
 ```
 mods/
@@ -100,37 +101,27 @@ mods/
   Faster Items/
     exefs/
       158C0C7399AABD7BF83795C2EF3484C7.ips
+  Course Mod/
+    atmosphere/contents/0100152000022000/romfs/
+      Course/Gu_FirstCircuit/course_model.szs
 ```
 
-`romfs` holds game files. A file replaces the game file at the same path. Mods apply from the top of the list to the bottom, so a lower mod wins when two mods replace the same file
-
-`exefs` holds code patches, as `.ips` or `.pchtxt` files. Mush8 applies them when you Prepare, so Prepare again after you change them. A code patch works only for one game update: Mush8 skips patches that are not for the update you use (3.0.5 or 4.0.1). Mush8 does not load replacement code modules (`main`, `subsdk0`...)
-
-If a code patch changes the same code as one of Mush8's own patches, the mod wins for the menus (main menu, 5-8 players row, ghost menu, ghost upload popup) and 60 fps split screen. Patches that change Mush8's 4K or Fill screen code are refused, turn the mod off to Prepare
-
-### Edit files inside archives
-Some mods change only a part of a large game archive, for example one character icon in `UI/cmn/menu.sarc`. Make a folder with the name of the archive, and put the changed part inside it. Mush8 then changes only that part, so many mods can edit the same archive. These archives can be edited:
-- `.sarc` and `.szs` archives: a file or folder inside them replaces or edits the inner file with the same name
-- `.bntx` texture packs: `<texture name>.png` replaces that texture. The image must have the same size as the texture
-- `.msbt` text files: `<label>.txt` replaces the text with that label. For example, label `1029` in `Common.msbt` is Ludwig's name
-
-If a mod replaces a whole archive, edits from mods lower in the list apply on top of its copy
-
-### Convert a mod made for Atmosphère or an emulator
-1. Make a folder for the mod in `mods`, for example `mods/My Mod`
-2. Find the `romfs` folder in the download. It is often at `atmosphere/contents/0100152000022000/romfs`. Move it to `mods/My Mod/romfs`
-3. If the download has game folders such as `Driver`, `Kart` or `UI` at its top, with no `romfs` folder, move them into `mods/My Mod/romfs`
-4. Move the `.ips` and `.pchtxt` files to `mods/My Mod/exefs`. They are often in `exefs` or in `atmosphere/exefs_patches/<name>`
-5. If the readme tells you to put images into an archive with Switch Toolbox, make the archive path as folders instead. For example, "menu.sarc → mn_L_CharaIcon_00.szs → timg → __Combined.bntx: tc_Chara" becomes `romfs/UI/cmn/menu.sarc/mn_L_CharaIcon_00.szs/timg/__Combined.bntx/tc_Chara_Ludwig.png`
-6. If the readme tells you to change a name in `message.sarc`, write the new name in `romfs/UI/<language>/message.sarc/Common.msbt/<label>.txt`, for each language you play in
-
-Mods that change tracks, characters or items can break LAN and online play with players who do not have the same mods
-
 ## Limitations
-- free Apple IDs and the `.ipa` (AltStore / SideStore) don't get the extended virtual addressing entitlement, so the game runs with a smaller 5 GB memory layout there (a paid account gets the full one)
-- Nintendo's online play is gone, use Online (lan-play) instead
-- 5 to 8 players split screen is Switch 2 only, so it's hidden
+- free Apple IDs and the `.ipa` (AltStore / SideStore) don't get the extended virtual addressing entitlement, so the game runs with a smaller 5 GB memory layout
+- Nintendo's online play isnt available
+- 5 to 8 players split screen is Switch 2 only
 - no amiibo (yet)
-- the two WebM videos (credits, Switch 2 dialog) play as a slideshow on iOS
+
+## Credits
+Thanks to everyone who contributed :
+- [codedpalette](https://github.com/codedpalette) : a bunch of fixes and improvements
+- [hchzr](https://github.com/hchzr) : 4K and 60 fps split screen
+- [lyccccy](https://github.com/lyccccy) : GPU heap split, so iPhones with less memory can render
+- [FritteHD](https://github.com/FritteHD) : browser phone pad
+- [justr4mzi](https://github.com/justr4mzi) : kernel signal, Mii and video decoder fixes
+- [184904](https://github.com/184904) : null index buffer fix
 
 Contributions are welcome !
+
+## Third party
+- [libvpx](https://chromium.googlesource.com/webm/libvpx) v1.17.0 VP8 decoder (BSD 3-Clause, see `crates/vpx/libvpx/LICENSE` and `PATENTS`) : WebM movies

@@ -43,22 +43,43 @@ pub struct PatchGroup {
     pub module_id: &'static str,
     pub name: &'static str,
     pub optional: bool,
+    pub online: bool,
     pub sites: &'static [u64],
 }
 
 pub const PATCH_GROUPS: &[PatchGroup] = &[
-    PatchGroup { module_id: MK8DX_401, name: "main menu", optional: true, sites: &[0x4d8a04, 0x4d8af8, 0x4d8b08, 0x4d8bb4, 0x4da738, 0x3fc4a8] },
-    PatchGroup { module_id: MK8DX_401, name: "5-8 players row", optional: true, sites: &[0x438f24, 0x439600, 0xb52a74] },
-    PatchGroup { module_id: MK8DX_401, name: "ghost menu", optional: true, sites: &[0x4a3214, 0x4a32d8, 0x4a493c] },
-    PatchGroup { module_id: MK8DX_401, name: "ghost upload popup", optional: true, sites: &[0x546a80] },
-    PatchGroup { module_id: MK8DX_401, name: "60 fps split screen", optional: true, sites: &[0xafecc8] },
-    PatchGroup { module_id: MK8DX_401, name: "4K", optional: false, sites: &[0x87de00, 0x3c7354, 0x3d6820, 0x7e342c, 0x7e3390] },
-    PatchGroup { module_id: MK8DX_305, name: "main menu", optional: true, sites: &[0x4d54bc, 0x4d55a4, 0x4d55b4, 0x4d5660, 0x4d70fc, 0x3fa344] },
-    PatchGroup { module_id: MK8DX_305, name: "ghost menu", optional: true, sites: &[0x49fea8, 0x49ff6c, 0x4a15d0] },
-    PatchGroup { module_id: MK8DX_305, name: "ghost upload popup", optional: true, sites: &[0x543254] },
-    PatchGroup { module_id: MK8DX_305, name: "60 fps split screen", optional: true, sites: &[0xafa2a8] },
-    PatchGroup { module_id: MK8DX_305, name: "4K", optional: false, sites: &[0x88a514, 0x3c51e8, 0x3d46bc, 0x7f01f0, 0x7f0154] },
+    PatchGroup { module_id: MK8DX_401, name: "main menu", optional: true, online: true, sites: &[0x4d8a04, 0x4d8af8, 0x4d8b08, 0x4d8bb4, 0x4da738, 0x3fc4a8] },
+    PatchGroup { module_id: MK8DX_401, name: "5-8 players row", optional: true, online: false, sites: &[0x438f24, 0x439600, 0xb52a74] },
+    PatchGroup { module_id: MK8DX_401, name: "ghost menu", optional: true, online: true, sites: &[0x4a3214, 0x4a32d8, 0x4a493c] },
+    PatchGroup { module_id: MK8DX_401, name: "ghost upload popup", optional: true, online: true, sites: &[0x546a80] },
+    PatchGroup { module_id: MK8DX_401, name: "60 fps split screen", optional: true, online: false, sites: &[0xafecc8] },
+    PatchGroup { module_id: MK8DX_401, name: "4K", optional: false, online: false, sites: &[0x87de00, 0x3c7354, 0x3d6820, 0x7e342c, 0x7e3390] },
+    PatchGroup { module_id: MK8DX_305, name: "main menu", optional: true, online: true, sites: &[0x4d54bc, 0x4d55a4, 0x4d55b4, 0x4d5660, 0x4d70fc, 0x3fa344] },
+    PatchGroup { module_id: MK8DX_305, name: "ghost menu", optional: true, online: true, sites: &[0x49fea8, 0x49ff6c, 0x4a15d0] },
+    PatchGroup { module_id: MK8DX_305, name: "ghost upload popup", optional: true, online: true, sites: &[0x543254] },
+    PatchGroup { module_id: MK8DX_305, name: "60 fps split screen", optional: true, online: false, sites: &[0xafa2a8] },
+    PatchGroup { module_id: MK8DX_305, name: "4K", optional: false, online: false, sites: &[0x88a514, 0x3c51e8, 0x3d46bc, 0x7f01f0, 0x7f0154] },
 ];
+
+#[derive(Clone, Copy)]
+enum Nextendo {
+    Original,
+    Patched,
+    Prefix(&'static [u32]),
+}
+
+const MOV_W1_1: u32 = 0x5280_0021;
+
+const NEXTENDO_SITES: &[(&str, u64, Nextendo)] = &[
+    (MK8DX_401, 0x4d8a04, Nextendo::Prefix(&[MOV_W1_1])),
+    (MK8DX_401, 0x4da738, Nextendo::Patched),
+    (MK8DX_305, 0x4d54bc, Nextendo::Prefix(&[MOV_W1_1])),
+    (MK8DX_305, 0x4d70fc, Nextendo::Patched),
+];
+
+fn nextendo_at(module_id: &str, site: u64) -> Nextendo {
+    NEXTENDO_SITES.iter().find(|(m, s, _)| *m == module_id && *s == site).map_or(Nextendo::Original, |(_, _, n)| *n)
+}
 
 pub fn group_of(module_id: &str, site: u64) -> Option<&'static PatchGroup> {
     PATCH_GROUPS.iter().find(|g| g.module_id == module_id && g.sites.contains(&site))
@@ -317,6 +338,7 @@ pub enum Kind {
     Svc,
     Exclusive,
     JumpTable,
+    Online,
 }
 
 #[derive(Debug, Clone)]
@@ -625,6 +647,26 @@ pub fn rewrite_skipping(nso: &nxfs::nso::Nso, skip: &[u64]) -> Result<Output> {
         patches.push(Patch { kind: Kind::Svc, start: i as u64 * 4, end: i as u64 * 4 + 4, tramp, tramp_len: e.pc() - tramp });
     }
 
+    let online: Vec<&GamePatch> = GAME_PATCHES
+        .iter()
+        .filter(|p| p.module_id == cx.module_id && !skip.contains(&p.site) && group_of(&cx.module_id, p.site).is_some_and(|g| g.online))
+        .filter(|p| !matches!(nextendo_at(&cx.module_id, p.site), Nextendo::Patched))
+        .collect();
+    check_online_entries(&cx, &words, &online)?;
+    for p in &online {
+        let i = p.site as usize / 4;
+        let end = p.site + 4 * p.from.len() as u64;
+        ensure!(patched[i] == words[i] && !patches.iter().any(|q| q.start < end && p.site < q.end), "online patch at {:#x} overlaps another rewrite", p.site);
+        let tramp = e.pc();
+        let prefix = match nextendo_at(&cx.module_id, p.site) {
+            Nextendo::Prefix(words) => words,
+            _ => &[],
+        };
+        emit_online_switch(&cx, &mut e, keypage, p.site, prefix, p.from, p.to).with_context(|| format!("online patch at {:#x}", p.site))?;
+        patched[i] = asm::b(p.site, tramp)?;
+        patches.push(Patch { kind: Kind::Online, start: p.site, end: p.site + 4 * p.from.len() as u64, tramp, tramp_len: e.pc() - tramp });
+    }
+
     if let Some(g) = game {
         for &site in g.aspect_stores {
             let i = site as usize / 4;
@@ -655,6 +697,128 @@ pub fn rewrite_skipping(nso: &nxfs::nso::Nso, skip: &[u64]) -> Result<Output> {
         tramp: (tramp_base, tramp_end),
         patches,
     })
+}
+
+fn emit_online_switch(cx: &Ctx, e: &mut Emitter, keypage: u64, site: u64, prefix: &[u32], from: &[u32], to: &[u32]) -> Result<()> {
+    ensure!(!from.is_empty() && from.len() == to.len(), "patch blocks differ in length");
+    let end = site + 4 * from.len() as u64;
+    e.emit(asm::stur(16, SP, -8));
+    let pc = e.pc();
+    e.emit(asm::adrp(16, pc, keypage)?);
+    e.emit(asm::ldrb_w(16, 16, keypage::NET));
+    e.emit(asm::sub_imm_w(16, 16, keypage::NET_NEXTENDO as u32));
+    let original = e.label();
+    e.cond_to(asm::cbz_w(16, 0), original);
+    e.emit(asm::ldur(16, SP, -8));
+    let mut exits = BTreeMap::new();
+    relocate(cx, e, &to[..1], site, false, &mut exits)?;
+    if !asm::is_b(to[0]) {
+        let pc = e.pc();
+        e.emit(asm::b(pc, site + 4)?);
+    }
+    e.bind(original);
+    e.emit(asm::ldur(16, SP, -8));
+    for &w in prefix {
+        ensure!(!asm::is_cond_branch(w) && !asm::is_uncond_branch(w) && !asm::is_adr(w) && !asm::is_adrp(w) && !asm::is_ldr_literal(w), "prefix word {w:#010x} depends on its address");
+        e.emit(w);
+    }
+    relocate(cx, e, from, site, true, &mut exits)?;
+    if !asm::is_b(from[from.len() - 1]) {
+        let pc = e.pc();
+        e.emit(asm::b(pc, end)?);
+    }
+    for (target, l) in exits {
+        e.bind(l);
+        let pc = e.pc();
+        e.emit(asm::b(pc, target)?);
+    }
+    e.resolve()
+}
+
+fn relocate(cx: &Ctx, e: &mut Emitter, block: &[u32], base: u64, internal: bool, exits: &mut BTreeMap<u64, usize>) -> Result<()> {
+    let end = base + 4 * block.len() as u64;
+    let labels: Vec<usize> = block.iter().map(|_| e.label()).collect();
+    let local = |t: u64| (internal && (base..end).contains(&t) && t % 4 == 0).then(|| labels[((t - base) / 4) as usize]);
+    let mut jumps = Vec::new();
+    for (k, &w) in block.iter().enumerate() {
+        e.bind(labels[k]);
+        let pc = base + 4 * k as u64;
+        let text = cx.text(w, pc)?;
+        let uses_x18 = text.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == "x18" || t == "w18");
+        let special = asm::is_svc(w) || asm::is_mrs(w) || asm::is_msr_reg(w) || asm::is_load_exclusive(w) || asm::is_store_exclusive(w);
+        ensure!(!uses_x18 && !special, "`{text}` at {pc:#x} needs its own rewrite");
+        if asm::is_adrp(w) || asm::is_adr(w) {
+            let (rd, target) = (w & 31, asm::adr_target(w, pc));
+            let here = e.pc();
+            e.emit(asm::adrp(rd, here, target)?);
+            if target & 0xFFF != 0 {
+                e.emit(asm::add_imm(rd, rd, (target & 0xFFF) as u32));
+            }
+        } else if asm::is_ldr_literal(w) {
+            ensure!((w >> 26) & 1 == 0, "SIMD literal load at {pc:#x}");
+            let (rt, target) = (w & 31, asm::ldr_literal_target(w, pc));
+            let here = e.pc();
+            e.emit(asm::adrp(rt, here, target)?);
+            e.emit(asm::add_imm(rt, rt, (target & 0xFFF) as u32));
+            e.emit(asm::ldr_literal_as_base(w, rt).context("prfm literal")?);
+        } else if asm::is_cond_branch(w) {
+            let t = asm::cond_target(w, pc);
+            let l = match local(t) {
+                Some(l) => l,
+                None => *exits.entry(t).or_insert_with(|| e.label()),
+            };
+            e.cond_to(w, l);
+        } else if asm::is_b(w) || asm::is_bl(w) {
+            let t = asm::branch_target(w, pc);
+            match local(t) {
+                Some(l) => {
+                    ensure!(asm::is_b(w), "bl into its own block at {pc:#x}");
+                    jumps.push((e.words.len(), l));
+                    e.emit(w);
+                }
+                None => {
+                    let here = e.pc();
+                    e.emit(if asm::is_bl(w) { asm::bl(here, t)? } else { asm::b(here, t)? });
+                }
+            }
+        } else {
+            e.emit(w);
+        }
+    }
+    for (at, l) in jumps {
+        let to = e.labels[l].context("unbound label")?;
+        e.words[at] = asm::b(e.base + at as u64 * 4, e.base + to as u64 * 4)?;
+    }
+    Ok(())
+}
+
+fn check_online_entries(cx: &Ctx, words: &[u32], online: &[&GamePatch]) -> Result<()> {
+    let spans: Vec<(u64, u64)> = online.iter().map(|p| (p.site, p.site + 4 * p.from.len() as u64)).collect();
+    let check = |w: u32, pc: u64, own: Option<(u64, u64)>| -> Result<()> {
+        let target = if asm::is_b(w) || asm::is_bl(w) {
+            asm::branch_target(w, pc)
+        } else if asm::is_cond_branch(w) {
+            asm::cond_target(w, pc)
+        } else {
+            return Ok(());
+        };
+        if let Some(&span) = spans.iter().find(|(s, e)| target > *s && target < *e) {
+            ensure!(own == Some(span), "`{}` at {pc:#x} enters the patch at {:#x} past its start", cx.text(w, pc)?, span.0);
+        }
+        Ok(())
+    };
+    for (i, &w) in words.iter().enumerate() {
+        let pc = i as u64 * 4;
+        if !spans.iter().any(|(s, e)| (*s..*e).contains(&pc)) {
+            check(w, pc, None)?;
+        }
+    }
+    for (p, &span) in online.iter().zip(&spans) {
+        for (k, &w) in p.from.iter().enumerate() {
+            check(w, p.site + 4 * k as u64, Some(span))?;
+        }
+    }
+    Ok(())
 }
 
 fn emit_aspect_scale(e: &mut Emitter, keypage: u64, store: u32, back: u64) -> Result<()> {
@@ -858,6 +1022,61 @@ mod tests {
             assert_eq!((uc.reg_read(R::X16).unwrap(), uc.reg_read(R::X17).unwrap()), (0x1616, 0x1717));
             assert_eq!(uc.reg_read(R::NZCV).unwrap(), 0x6000_0000);
             assert_eq!(&*uc.reg_read_long(R::Q1).unwrap(), &[0x5A; 16]);
+        }
+    }
+
+    #[test]
+    fn online_switch_runs_the_original_in_nextendo_mode() {
+        let (site, keypage, tramp) = (0x1000u64, 0x4000u64, 0x8000u64);
+        let from = [0xD280_0040, 0xB400_0041, 0x1400_0002, 0xD280_0123, 0xD280_0084];
+        let to = [0xD280_0020, 0xD280_0025, 0xD503_201F, 0xD503_201F, 0xD503_201F];
+        let cx = Ctx { cs: classify::capstone().unwrap(), module_id: String::new(), words: &[], image: &[] };
+        let mut e = Emitter { base: tramp, words: Vec::new(), fixups: Vec::new(), labels: Vec::new() };
+        emit_online_switch(&cx, &mut e, keypage, site, &[], &from, &to).unwrap();
+        let end = site + 4 * from.len() as u64;
+        for (net, x1, expect) in [(0u8, 0u64, (1, 0x33, 0x44, 1)), (2, 0, (1, 0x33, 0x44, 1)), (4, 0, (2, 9, 4, 0x55)), (4, 1, (2, 0x33, 4, 0x55))] {
+            let mut uc = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN).unwrap();
+            uc.mem_map(0, 0x10000, Prot::ALL).unwrap();
+            let mut code: Vec<u32> = to.to_vec();
+            code[0] = asm::b(site, tramp).unwrap();
+            uc.mem_write(site, &code.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+            uc.mem_write(tramp, &e.words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+            uc.mem_write(keypage + keypage::NET as u64, &[net]).unwrap();
+            for (r, v) in [(R::X1, x1), (R::X3, 0x33), (R::X4, 0x44), (R::X5, 0x55), (R::X16, 0x1616), (R::SP, 0x9000), (R::NZCV, 0x6000_0000)] {
+                uc.reg_write(r, v).unwrap();
+            }
+            uc.emu_start(site, end, 0, 64).unwrap();
+            let got = (uc.reg_read(R::X0).unwrap(), uc.reg_read(R::X3).unwrap(), uc.reg_read(R::X4).unwrap(), uc.reg_read(R::X5).unwrap());
+            assert_eq!(got, expect, "net {net} x1 {x1}");
+            assert_eq!(uc.reg_read(R::PC).unwrap(), end);
+            assert_eq!(uc.reg_read(R::X16).unwrap(), 0x1616);
+            assert_eq!(uc.reg_read(R::NZCV).unwrap(), 0x6000_0000);
+        }
+    }
+
+    #[test]
+    fn nextendo_prefix_runs_before_the_original() {
+        let (site, keypage, tramp) = (0x1000u64, 0x4000u64, 0x8000u64);
+        let cx = Ctx { cs: classify::capstone().unwrap(), module_id: String::new(), words: &[], image: &[] };
+        let mut e = Emitter { base: tramp, words: Vec::new(), fixups: Vec::new(), labels: Vec::new() };
+        emit_online_switch(&cx, &mut e, keypage, site, &[MOV_W1_1], &[0xD280_0040], &[0xD280_0020]).unwrap();
+        for (net, expect) in [(0u8, (1, 0x77)), (4, (2, 1))] {
+            let mut uc = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN).unwrap();
+            uc.mem_map(0, 0x10000, Prot::ALL).unwrap();
+            uc.mem_write(site, &asm::b(site, tramp).unwrap().to_le_bytes()).unwrap();
+            uc.mem_write(tramp, &e.words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+            uc.mem_write(keypage + keypage::NET as u64, &[net]).unwrap();
+            uc.reg_write(R::X1, 0x77).unwrap();
+            uc.reg_write(R::SP, 0x9000).unwrap();
+            uc.emu_start(site, site + 4, 0, 32).unwrap();
+            assert_eq!((uc.reg_read(R::X0).unwrap(), uc.reg_read(R::X1).unwrap()), expect, "net {net}");
+        }
+    }
+
+    #[test]
+    fn nextendo_sites_are_online_patches() {
+        for &(module_id, site, _) in NEXTENDO_SITES {
+            assert!(group_of(module_id, site).is_some_and(|g| g.online), "{site:#x} is not an online patch");
         }
     }
 

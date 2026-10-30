@@ -10,6 +10,41 @@ use objc2_ui_kit::{NSTextAlignment, UIColor, UIEvent, UIFont, UILabel, UIRespond
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::LazyLock;
+use std::time::Instant;
+
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+static LAST: AtomicU64 = AtomicU64::new(0);
+static IDLE: AtomicBool = AtomicBool::new(false);
+static HOLDING: AtomicBool = AtomicBool::new(false);
+const IDLE_AFTER: f32 = 10.0;
+
+fn mark() {
+    LAST.store(START.elapsed().as_millis() as u64, Relaxed);
+}
+
+fn idle_secs() -> f32 {
+    (START.elapsed().as_millis() as u64).saturating_sub(LAST.load(Relaxed)) as f32 / 1000.0
+}
+
+pub fn idle() -> bool {
+    !HOLDING.load(Relaxed) && idle_secs() > IDLE_AFTER
+}
+
+pub fn set_idle(idle: bool) {
+    PAD.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(p) = p.as_mut() else { return };
+        if idle && p.shown && self::idle() && p.held.is_empty() && p.stick.touch.is_none() {
+            IDLE.store(true, Relaxed);
+            hide(p);
+        } else if !idle && IDLE.swap(false, Relaxed) {
+            show_controls(p, true);
+            p.shown = true;
+        }
+    });
+}
 
 const BUTTONS: [(&str, u64); 8] = [("A", A), ("B", B), ("X", X), ("Y", Y), ("L", L), ("R", R), ("+", PLUS), ("−", MINUS)];
 const FILL: f64 = 0.35;
@@ -148,17 +183,28 @@ fn show_controls(p: &Pad, visible: bool) {
 }
 
 pub fn set_visible(visible: bool) {
+    IDLE.store(false, Relaxed);
+    if visible {
+        mark();
+    }
     PAD.with(|p| {
         let mut p = p.borrow_mut();
         let Some(p) = p.as_mut() else { return };
-        show_controls(p, visible);
-        p.shown = visible;
-        if !visible {
-            p.held.clear();
-            p.stick.touch = None;
-            publish(p);
+        if visible {
+            show_controls(p, true);
+            p.shown = true;
+        } else {
+            hide(p);
         }
     });
+}
+
+fn hide(p: &mut Pad) {
+    show_controls(p, false);
+    p.shown = false;
+    p.held.clear();
+    p.stick.touch = None;
+    publish(p);
 }
 
 fn layout() {
@@ -203,6 +249,11 @@ fn handle(view: &TouchView, touches: &NSSet<UITouch>, phase: Phase) {
     PAD.with(|p| {
         let mut p = p.borrow_mut();
         let Some(p) = p.as_mut() else { return };
+        mark();
+        if phase == Phase::Began && !p.shown && IDLE.swap(false, Relaxed) {
+            show_controls(p, true);
+            p.shown = true;
+        }
         let b = view.bounds().size;
         for t in touches.allObjects().iter() {
             let id = &*t as *const UITouch as usize;
@@ -223,7 +274,7 @@ fn handle(view: &TouchView, touches: &NSSet<UITouch>, phase: Phase) {
                         p.stick.origin = pt;
                         place(&p.stick.base, pt, p.stick.radius);
                         move_stick(&p.stick, pt);
-                    } else if !super::ios::CONTROLLER_MODE.load(Relaxed) {
+                    } else if !super::ios::CONTROLLER_MODE.load(Relaxed) && !super::ios::TV.load(Relaxed) {
                         let at = super::screen_point(pt.x, pt.y, b.width, b.height);
                         if super::on_screen(at) {
                             p.screen.insert(id);
@@ -270,6 +321,7 @@ fn move_stick(s: &Stick, pt: CGPoint) {
 fn publish(p: &Pad) {
     let held = p.held.values().fold(0, |m, b| m | b);
     input::TOUCH_BUTTONS.store(held, Relaxed);
+    HOLDING.store(!p.held.is_empty() || p.stick.touch.is_some(), Relaxed);
     if p.stick.touch.is_none() {
         input::set_touch_stick(0.0, 0.0);
     }

@@ -101,18 +101,49 @@ fn run_webm(movie: &super::webm::Movie, us: i64, tx: &SyncSender<Vec<u8>>, spare
     let size = stride * rows * 3 / 2;
     let start = movie.frames.iter().position(|f| f.us >= us).unwrap_or(movie.frames.len());
     let key = movie.frames[..=start.min(movie.frames.len() - 1)].iter().rposition(|f| f.key).unwrap_or(0);
+    let Some(mut dec) = vpx::Vp8::new() else {
+        eprintln!("[movie] VP8 decoder failed to start");
+        return;
+    };
     let mut last = vec![0u8; size];
     last[stride * rows..].fill(128);
-    movie.keyframe_nv12(key, &mut last, stride, rows);
-    for i in start..movie.frames.len() {
-        if i != key && movie.frames[i].key {
-            movie.keyframe_nv12(i, &mut last, stride, rows);
+    let mut warned = false;
+    for (i, f) in movie.frames.iter().enumerate().skip(key) {
+        match dec.decode(&movie.data[f.range.clone()]) {
+            Ok(Some(img)) => nv12(&img, &mut last, stride, rows),
+            Ok(None) => {}
+            Err(e) if !warned => {
+                warned = true;
+                eprintln!("[movie] VP8 frame {i}: decode error {e}");
+            }
+            Err(_) => {}
+        }
+        if i < start {
+            continue;
         }
         let mut out = spare.try_recv().unwrap_or_default();
         out.clear();
         out.extend_from_slice(&last);
         if tx.send(out).is_err() {
             return;
+        }
+    }
+}
+
+fn nv12(img: &vpx::Image, out: &mut [u8], stride: usize, rows: usize) {
+    let (w, h) = (img.width.min(stride), img.height.min(rows));
+    let [y, u, v] = img.planes;
+    let [ys, us, vs] = img.strides;
+    for r in 0..h {
+        out[r * stride..r * stride + w].copy_from_slice(&y[r * ys..r * ys + w]);
+    }
+    let uv = stride * rows;
+    let (cw, ch) = (img.width.div_ceil(2).min(stride / 2), img.height.div_ceil(2).min(rows / 2));
+    for r in 0..ch {
+        let (u, v, o) = (&u[r * us..r * us + cw], &v[r * vs..r * vs + cw], &mut out[uv + r * stride..uv + r * stride + cw * 2]);
+        for x in 0..cw {
+            o[2 * x] = u[x];
+            o[2 * x + 1] = v[x];
         }
     }
 }

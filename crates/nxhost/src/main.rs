@@ -52,6 +52,7 @@ struct Npdm {
 fn read_npdm(path: &PathBuf) -> Result<Npdm> {
     let b = std::fs::read(path).with_context(|| path.display().to_string())?;
     anyhow::ensure!(b.len() >= 0x20 && &b[..4] == b"META", "not an NPDM");
+    anyhow::ensure!(b[0xC] & 1 != 0, "32-bit ARM (AArch32) code is not supported; Mush8 requires AArch64");
     Ok(Npdm { priority: b[0xE], core: b[0xF], stack_size: u32::from_le_bytes(b[0x1C..0x20].try_into()?) })
 }
 
@@ -120,8 +121,6 @@ struct Args {
     mods: Vec<PathBuf>,
     #[arg(long)]
     precompile: bool,
-    #[arg(long)]
-    movies: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -155,9 +154,10 @@ fn main() {
         unsafe { std::env::set_var(k, v) };
     }
     eprintln!("[host] iOS: files in {}, bundle {}", docs.display(), bundle.display());
-    let args = Args::parse_from(["nxhost", "--patched", &bundle.join("modules").display().to_string(), "--npdm", &bundle.join("modules/main.npdm").display().to_string()]);
+    let mut args = Args::parse_from(["nxhost", "--patched", &bundle.join("modules").display().to_string(), "--npdm", &bundle.join("modules/main.npdm").display().to_string()]);
     gfx::run_app(move || {
         apply_launcher_settings();
+        args.mods = ios_mods();
         let missing: Vec<&str> = ["prod.keys", "base.nsp", "update.nsp"].into_iter().filter(|f| !update_file(std::path::Path::new(f)).exists()).collect();
         anyhow::ensure!(
             missing.is_empty(),
@@ -169,11 +169,25 @@ fn main() {
 }
 
 #[cfg(target_os = "ios")]
+fn ios_mods() -> Vec<PathBuf> {
+    use std::ffi::{CStr, c_char, c_void};
+    unsafe extern "C" {
+        fn mush8_each_mod(context: *mut c_void, callback: extern "C" fn(*mut c_void, *const c_char));
+    }
+    extern "C" fn collect(context: *mut c_void, path: *const c_char) {
+        let mods = unsafe { &mut *context.cast::<Vec<PathBuf>>() };
+        mods.push(PathBuf::from(unsafe { CStr::from_ptr(path) }.to_string_lossy().as_ref()));
+    }
+    let mut mods = Vec::new();
+    unsafe { mush8_each_mod((&mut mods as *mut Vec<PathBuf>).cast(), collect) };
+    mods
+}
+
+#[cfg(target_os = "ios")]
 fn apply_launcher_settings() {
     let config = std::fs::read_to_string("config.json").unwrap_or_default();
     let field = |key: &str| {
-        let rest = config.split(&format!("\"{key}\"")).nth(1)?;
-        let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+        let rest = config.split(&format!("\"{key}\"")).skip(1).find_map(|r| r.trim_start().strip_prefix(':'))?.trim_start();
         if let Some(rest) = rest.strip_prefix('"') {
             let mut out = String::new();
             let mut chars = rest.chars();
@@ -201,6 +215,9 @@ fn apply_launcher_settings() {
     if let Some(server) = field("lanplay_server").filter(|s| !s.is_empty()) {
         unsafe { std::env::set_var("NX_LANPLAY_SERVER", server) };
     }
+    if let Some(pid) = field("nextendo_pid").filter(|s| !s.is_empty() && s != "0") {
+        unsafe { std::env::set_var("NX_NEXTENDO_PID", pid) };
+    }
     if field("prewarm_pipelines").as_deref() != Some("false") {
         unsafe { std::env::set_var("NX_PREWARM", "1") };
     }
@@ -209,6 +226,9 @@ fn apply_launcher_settings() {
     }
     if field("rumble").as_deref() == Some("false") {
         unsafe { std::env::set_var("NX_RUMBLE", "0") };
+    }
+    if let Some(min) = field("rumble_min") {
+        unsafe { std::env::set_var("NX_RUMBLE_MIN", min) };
     }
     if field("gamepad_driver").as_deref() == Some("sdl") {
         unsafe { std::env::set_var("NX_PAD_DRIVER", "sdl") };
@@ -224,6 +244,9 @@ fn apply_launcher_settings() {
     }
     if field("phone_pads").as_deref() == Some("true") {
         unsafe { std::env::set_var("NX_PHONE_PADS", "1") };
+        if field("browser_pads").as_deref() == Some("true") {
+            unsafe { std::env::set_var("NX_BROWSER_PADS", "1") };
+        }
     }
     if field("aspect").as_deref() != Some("16:9") {
         unsafe { std::env::set_var("NX_ASPECT", "auto") };
@@ -246,10 +269,6 @@ fn start(args: Args) -> Result<()> {
     let version = game::identify(&update, &dir)?;
     let romfs = mods::romfs(program(&update)?.patched_romfs(program(&base)?)?, &args.mods)?;
     eprintln!("[host] RomFS: {:.2} GB", nxfs::storage::Storage::size(&*romfs) as f64 / 1e9);
-    if args.movies {
-        movie::webm::convert_all(romfs)?;
-        std::process::exit(0);
-    }
     if args.precompile {
         let modules: Vec<PathBuf> = ["main", "subsdk0", "sdk"].iter().map(|m| dir.join(format!("{m}.bin"))).collect();
         nvn::precompile(romfs, &modules)?;
@@ -308,6 +327,7 @@ fn start(args: Args) -> Result<()> {
     a.set(a.stack(), stack_size, mem::Block { state: mem::state::STACK, perm: mem::perm::RW, attr: 0 })?;
     let h = kernel::create_thread(start, 0, a.stack() + stack_size, npdm.priority as i32, npdm.core as i32)?;
     let t = kernel::thread(h).unwrap();
+    services::nextendo::log_start();
     eprintln!("[host] main thread {h:#x}: prio {} core {} stack {stack_size:#x}; entering nn::init::Start", npdm.priority, npdm.core);
     let main_base = mods[0].base;
     let j = kernel::start_thread(t, [h as u64, main_base, init_done as *const () as usize as u64, init_modules as *const () as usize as u64])?;
