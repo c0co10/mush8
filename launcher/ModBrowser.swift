@@ -1,4 +1,5 @@
 // Mush8 - ModBrowser.swift
+// Constantin Clerc (c22dev) - 0.1
 import SwiftUI
 
 struct ModBrowserView: View {
@@ -564,7 +565,6 @@ struct ModBrowserView: View {
                 let name = try await ModInstaller.install(mod: mod, file: file, in: folder) { update in
                     Task { @MainActor in
                         guard transferID == token else { return }
-                        // Late delegate events must not rewind bytes or the installation stage.
                         if let update {
                             guard let current = downloadProgress, update.receivedBytes >= current.receivedBytes else { return }
                         }

@@ -1,4 +1,5 @@
 // Mush8 - GameBanana.swift
+// Constantin Clerc (c22dev) - 0.1
 import Foundation
 import CryptoKit
 
@@ -119,7 +120,6 @@ enum GameBanana {
             try Task.checkCancellation()
             let size = (try FileManager.default.attributesOfItem(atPath: temporary.path)[.size] as? NSNumber)?.int64Value ?? 0
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // Keep an existing destination intact if a caller accidentally reuses its path.
             try FileManager.default.moveItem(at: temporary, to: destination)
             progress(BananaDownloadProgress(receivedBytes: size, totalBytes: size > 0 ? size : nil))
         } catch {

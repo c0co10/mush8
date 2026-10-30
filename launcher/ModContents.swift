@@ -1,4 +1,5 @@
 // Mush8 - ModContents.swift
+// Constantin Clerc (c22dev) - 0.1
 import SwiftUI
 
 struct ModContentsView: View {

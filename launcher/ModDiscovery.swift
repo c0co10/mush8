@@ -1,4 +1,5 @@
 // Mush8 - ModDiscovery.swift
+// Constantin Clerc (c22dev) - 0.1
 import Foundation
 
 struct Mod: Identifiable, Sendable {

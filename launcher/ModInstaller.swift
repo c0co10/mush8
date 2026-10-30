@@ -1,4 +1,5 @@
 // Mush8 - ModInstaller.swift
+// Constantin Clerc (c22dev) - 0.1
 import Foundation
 
 enum ModInstaller {
@@ -67,7 +68,6 @@ enum ModInstaller {
         let payload = packages[0]
         try validate(payload)
         try Task.checkCancellation()
-        // Publish only the fully checked package, on the same filesystem as mods.
         try fm.moveItem(at: payload, to: destination)
         return name
     }
