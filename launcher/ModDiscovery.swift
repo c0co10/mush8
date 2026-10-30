@@ -99,6 +99,19 @@ func gameBuildIDs(in folder: URL) -> Set<String>? {
     return ids.isEmpty ? nil : Set(ids)
 }
 
+func modEntries(_ dir: URL) -> [URL] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { !$0.hasPrefix(".") }.map { dir.appendingPathComponent($0) }
+}
+
+func stubFiles(in dir: URL, depth: Int = 0) -> [URL] {
+    guard depth < 64 else { return [] }
+    return modEntries(dir).flatMap { url -> [URL] in
+        if url.pathExtension.caseInsensitiveCompare("stub") == .orderedSame { return [url] }
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue ? stubFiles(in: url, depth: depth + 1) : []
+    }
+}
+
 func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
     func relative(_ url: URL) -> String? {
         let prefix = folder.path + "/"
@@ -118,7 +131,7 @@ func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
                  caselessChild(dir, "contents").flatMap { caselessChild($0, "0100152000022000") },
                  caselessChild(dir, "0100152000022000")].compactMap { $0 }
     let content = roots.first {
-        caselessChild($0, "romfs") != nil || caselessChild($0, "exefs") != nil || modEntries($0, directories: false).contains(where: unsupported)
+        caselessChild($0, "romfs") != nil || caselessChild($0, "exefs") != nil || modEntries($0).contains(where: unsupported)
     }
     let romfs = content.flatMap { caselessChild($0, "romfs") }
     let exefs = content.flatMap { caselessChild($0, "exefs") }
@@ -140,11 +153,11 @@ func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
     guard content != nil || hasPatches, let path = relative(dir) else { return nil }
     let patchPaths = patches.compactMap(relative)
     guard patchPaths.count == patches.count else { return nil }
-    let romfsStubs = romfs.flatMap { FileManager.default.enumerator(at: $0, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) }
-        .map { $0.compactMap { $0 as? URL }.filter { $0.pathExtension.caseInsensitiveCompare("stub") == .orderedSame } } ?? []
-    let plugins = (romfs.flatMap { caselessChild($0, "skyline") }.flatMap { caselessChild($0, "plugins") }.map { modEntries($0, directories: false) } ?? [])
+    let romfsStubs = romfs.map { stubFiles(in: $0) } ?? []
+    let exefsEntries = exefs.map { modEntries($0) } ?? []
+    let plugins = (romfs.flatMap { caselessChild($0, "skyline") }.flatMap { caselessChild($0, "plugins") }.map { modEntries($0) } ?? [])
         .filter { $0.pathExtension.caseInsensitiveCompare("nro") == .orderedSame }
-    let npdm = files.first { $0.lastPathComponent.caseInsensitiveCompare("main.npdm") == .orderedSame }
+    let npdm = exefsEntries.first { $0.lastPathComponent.caseInsensitiveCompare("main.npdm") == .orderedSame }
     let badNpdm = npdm.map { url in
         let header = (try? FileHandle(forReadingFrom: url)).flatMap { handle in
             defer { try? handle.close() }
@@ -152,11 +165,11 @@ func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
         } ?? Data()
         return !(header.count == 0x20 && header.prefix(4) == Data("META".utf8) && header[0xC] & 1 != 0)
     } ?? false
-    let unsupportedFiles = (content.map { modEntries($0, directories: false) } ?? []).filter(unsupported)
-        + files.filter { $0.pathExtension.caseInsensitiveCompare("stub") == .orderedSame }
+    let unsupportedFiles = (content.map { modEntries($0) } ?? []).filter(unsupported)
+        + exefsEntries.filter { $0.pathExtension.caseInsensitiveCompare("stub") == .orderedSame }
         + romfsStubs + plugins + (badNpdm ? npdm.map { [$0] } ?? [] : [])
     return Mod(id: id, name: name, path: path, romfs: romfs != nil,
-               patches: patchPaths, replacedModules: files.contains {
+               patches: patchPaths, replacedModules: exefsEntries.contains {
                    let name = $0.lastPathComponent.lowercased()
                    return ["main", "sdk", "rtld"].contains(name) || (name.hasPrefix("subsdk") && $0.pathExtension.isEmpty)
                }, unsupportedFiles: unsupportedFiles.map(\.lastPathComponent))
