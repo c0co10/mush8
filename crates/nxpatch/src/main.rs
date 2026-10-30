@@ -94,6 +94,7 @@ fn main() -> Result<()> {
         Cmd::Rewrite { nso, out, patch } => {
             std::fs::create_dir_all(&out)?;
             let _ = std::fs::remove_file(out.join("nxpatch.stamp"));
+            let _ = std::fs::remove_file(out.join("nxpatch.skipped"));
             let mut skipped = String::new();
             let mut patches = Vec::new();
             for p in &patch {
