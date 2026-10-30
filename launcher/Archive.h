@@ -17,6 +17,7 @@ ssize_t archive_read_data(struct archive *, void *, size_t);
 int archive_read_free(struct archive *);
 const char *archive_error_string(struct archive *);
 const char *archive_entry_pathname(struct archive_entry *);
+const char *archive_entry_pathname_utf8(struct archive_entry *);
 mode_t archive_entry_filetype(struct archive_entry *);
 int64_t archive_entry_size(struct archive_entry *);
 const char *archive_entry_symlink(struct archive_entry *);

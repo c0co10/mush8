@@ -137,6 +137,8 @@ enum GameBanana {
         return detail
     }
 
+    private static let apiSession = session()
+
     private static func session(resourceTimeout: TimeInterval = 60, delegate: URLSessionDelegate? = nil) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 60
@@ -150,23 +152,31 @@ enum GameBanana {
         var components = URLComponents(string: "https://gamebanana.com/apiv11/\(path)")!
         components.queryItems = parameters
         let guardDelegate = NetworkGuard(limit: Int64(responseLimit))
-        let session = session()
-        defer { session.invalidateAndCancel() }
+        var task: URLSessionDataTask?
         do {
-            let (bytes, response) = try await session.bytes(for: URLRequest(url: components.url!), delegate: guardDelegate)
+            let (bytes, response) = try await apiSession.bytes(for: URLRequest(url: components.url!), delegate: guardDelegate)
+            task = bytes.task
             try check(response, guardDelegate: guardDelegate)
             guard response.expectedContentLength <= responseLimit else { throw ModError("GameBanana's response is too large.") }
-            var data = Data()
+            var data = Data(capacity: max(0, Int(response.expectedContentLength)))
+            var chunk = [UInt8]()
+            chunk.reserveCapacity(64 * 1024)
             for try await byte in bytes {
-                guard data.count < responseLimit else { throw ModError("GameBanana's response is too large.") }
-                data.append(byte)
-                if data.count.isMultiple(of: 4096) { try Task.checkCancellation() }
+                chunk.append(byte)
+                guard chunk.count == chunk.capacity else { continue }
+                guard data.count + chunk.count <= responseLimit else { throw ModError("GameBanana's response is too large.") }
+                data.append(contentsOf: chunk)
+                chunk.removeAll(keepingCapacity: true)
+                try Task.checkCancellation()
             }
+            guard data.count + chunk.count <= responseLimit else { throw ModError("GameBanana's response is too large.") }
+            data.append(contentsOf: chunk)
             try Task.checkCancellation()
             guard !data.isEmpty else { throw ModError("GameBanana returned an empty response. Please try again later.") }
             do { return try JSONDecoder().decode(T.self, from: data) }
             catch { throw ModError("GameBanana returned an unexpected response. Please try again later.") }
         } catch {
+            task?.cancel()
             if Task.isCancelled { throw CancellationError() }
             throw guardDelegate.failure ?? error
         }

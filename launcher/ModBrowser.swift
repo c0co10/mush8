@@ -385,7 +385,7 @@ struct ModBrowserView: View {
                         .padding(.vertical, 6)
                         .background(.green.opacity(0.14), in: Capsule())
                 } else if patchOnly {
-                    Label("Mac rebuild required", systemImage: "hammer")
+                    Label("Not supported on iOS", systemImage: "hammer")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.orange)
                 } else {
@@ -460,7 +460,7 @@ struct ModBrowserView: View {
         #if os(macOS)
         "Files install into your mods folder. Check the author's game-version requirements. Code patches need Prepare before Play."
         #else
-        "Files install into this app's mods folder. iOS supports RomFS-only mods; code patches require rebuilding on a Mac."
+        "Files install into this app's mods folder. iOS supports RomFS-only mods; code patches don't run on iOS."
         #endif
     }
 

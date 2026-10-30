@@ -11,11 +11,12 @@ struct ModContentsView: View {
     @State private var filter = ""
     @State private var collapsed: Set<String> = []
 
+    private var query: String { filter.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     private var visibleEntries: [ModFileEntry] {
         guard let entries = tree?.entries else { return [] }
-        let trimmed = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return entries.filter { $0.path.localizedCaseInsensitiveContains(trimmed) }
+        if !query.isEmpty {
+            return entries.filter { $0.path.localizedCaseInsensitiveContains(query) }
         }
         return entries.filter { entry in
             !collapsed.contains { prefix in
@@ -61,7 +62,7 @@ struct ModContentsView: View {
                 if let tree {
                     List(visibleEntries) { entry in
                         HStack(alignment: .center, spacing: 8) {
-                            if entry.directory && filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            if entry.directory && query.isEmpty {
                                 Button {
                                     if collapsed.contains(entry.path) { collapsed.remove(entry.path) }
                                     else { collapsed.insert(entry.path) }
@@ -79,7 +80,7 @@ struct ModContentsView: View {
                                 .foregroundStyle(entry.directory ? Color.accentColor : .secondary)
                                 .frame(width: 20)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(filter.isEmpty ? entry.name : entry.path)
+                                Text(query.isEmpty ? entry.name : entry.path)
                                     .font(.system(.callout, design: .monospaced).weight(entry.directory ? .semibold : .regular))
                                     .textSelection(.enabled)
                                 if entry.symbolicLink { Text("Symbolic link · not followed").font(.caption).foregroundStyle(.secondary) }
@@ -90,7 +91,7 @@ struct ModContentsView: View {
                                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                             }
                         }
-                        .padding(.leading, filter.isEmpty ? CGFloat(min(entry.depth, 10)) * 14 : 0)
+                        .padding(.leading, query.isEmpty ? CGFloat(min(entry.depth, 10)) * 14 : 0)
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("\(entry.path), \(entry.symbolicLink ? "symbolic link" : (entry.directory ? "folder" : "file"))")
                     }

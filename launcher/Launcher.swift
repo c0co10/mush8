@@ -136,9 +136,7 @@ final class Settings: ObservableObject {
 
     var folderURL: URL { URL(fileURLWithPath: folder) }
 
-    var enabledMods: [Mod] { installedMods(in: folderURL).filter { !disabledMods.contains($0.id) } }
-
-    var codePatches: [String] { enabledMods.flatMap(\.patches) }
+    func codePatches(_ mods: [Mod]) -> [String] { enabledCodePatches(mods, disabled: disabledMods) }
 
     func save() {
         let j: [String: Any] = [
@@ -185,12 +183,16 @@ final class Settings: ObservableObject {
         return env
     }
 
-    var arguments: [String] {
+    func arguments(_ mods: [Mod]) -> [String] {
         var a = ["--keys", keys, "--base", base, "--update", update]
         if FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(dlc).path) { a += ["--dlc", dlc] }
-        for m in enabledMods { a += ["--mod", m.path] }
+        for m in mods where !disabledMods.contains(m.id) && m.romfs && m.loadable { a += ["--mod", m.path] }
         return a
     }
+}
+
+func enabledCodePatches(_ mods: [Mod], disabled: [String]) -> [String] {
+    mods.filter { !disabled.contains($0.id) && $0.loadable }.flatMap(\.patches)
 }
 
 struct Check: Identifiable {
@@ -200,20 +202,19 @@ struct Check: Identifiable {
     var optional = false
 }
 
-func checks(_ s: Settings) -> [Check] {
+func checks(_ s: Settings, mods: [Mod]) -> [Check] {
     let fm = FileManager.default
     let f = s.folderURL
     let has = { (p: String) in fm.fileExists(atPath: f.appendingPathComponent(p).path) }
     let shaderIndex = f.appendingPathComponent("work/shader_cache.noindex/heap-segments-v2/index.tsv").path
     let shaders = (try? fm.attributesOfItem(atPath: shaderIndex)[.size] as? Int) ?? nil
-    let mods = installedMods(in: f)
     let on = mods.filter { !s.disabledMods.contains($0.id) }.count
     return [
         Check(id: "Base Game", ok: has(s.base), detail: has(s.base) ? s.base : "not found"),
         Check(id: "Update", ok: has(s.update), detail: has(s.update) ? s.update : "not found"),
         Check(id: "Booster Course Pass", ok: has(s.dlc), detail: has(s.dlc) ? s.dlc : "none", optional: true),
         Check(id: "Mods", ok: !mods.isEmpty, detail: mods.isEmpty ? "none" : "\(on) of \(mods.count) on", optional: true),
-        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f, patches: s.codePatches) && preparedSource(in: f) == updateSource(s),
+        Check(id: "Game code for this Mac", ok: gameCodeReady(in: f, patches: s.codePatches(mods)) && preparedSource(in: f) == updateSource(s),
               detail: preparedVersion(in: f).map { "work/v-upd/patched (\($0))" } ?? "work/v-upd/patched"),
         Check(id: "Precompiled shaders", ok: (shaders ?? 0) > 0,
               detail: shaders == 0 ? "none, install the Metal Toolchain and Prepare again" : "work/shader_cache.noindex/heap-segments-v2", optional: shaders == 0),
@@ -227,30 +228,32 @@ final class Preparer: ObservableObject {
     @Published var line = ""
     @Published var error: String?
 
-    func run(_ s: Settings, done: @escaping () -> Void) {
+    func run(_ s: Settings, mods: [Mod], done: @escaping () -> Void) {
         let f = s.folderURL
-        var steps: [(URL, [String])] = []
+        let disabled = s.disabledMods
+        var steps: [(URL, () -> [String])] = []
         let fm = FileManager.default
         if preparedSource(in: f) != updateSource(s) || !fm.fileExists(atPath: f.appendingPathComponent("work/v-upd/exefs/main").path) {
             try? fm.removeItem(at: f.appendingPathComponent("work/v-upd"))
             try? fm.createDirectory(at: f.appendingPathComponent("work/v-upd"), withIntermediateDirectories: true)
             try? updateSource(s).write(to: f.appendingPathComponent("work/v-upd/source"), atomically: true, encoding: .utf8)
-            steps.append((tool("nxfs", in: f), ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]))
+            let extract = ["extract", "--keys", s.keys, "--base", s.base, "--update", s.update, "--out", "work/v-upd"]
+            steps.append((tool("nxfs", in: f), { extract }))
         }
-        let patches = s.codePatches
-        if !gameCodeReady(in: f, patches: patches) {
-            steps.append((tool("nxpatch", in: f), ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]
-                + patches.flatMap { ["--patch", $0] }))
+        if !gameCodeReady(in: f, patches: s.codePatches(mods)) {
+            steps.append((tool("nxpatch", in: f), { ["rewrite", "--out", "work/v-upd/patched", "work/v-upd/exefs/main", "work/v-upd/exefs/subsdk0", "work/v-upd/exefs/sdk"]
+                + enabledCodePatches(installedMods(in: f), disabled: disabled).flatMap { ["--patch", $0] } }))
         }
-        steps.append((tool("nxhost", in: f), s.arguments + ["--precompile"]))
+        let precompile = s.arguments(mods) + ["--precompile"]
+        steps.append((tool("nxhost", in: f), { precompile }))
         if s.pipelineArchive { setenv("NX_PIPELINE_ARCHIVE", "1", 1) } else { unsetenv("NX_PIPELINE_ARCHIVE") }
         running = true
         error = nil
         next(steps[...], folder: f, done: done)
     }
 
-    private func next(_ steps: ArraySlice<(URL, [String])>, folder: URL, done: @escaping () -> Void) {
-        guard let (exe, args) = steps.first else {
+    private func next(_ steps: ArraySlice<(URL, () -> [String])>, folder: URL, done: @escaping () -> Void) {
+        guard let (exe, args) = steps.first.map({ ($0.0, $0.1()) }) else {
             running = false
             line = ""
             done()
@@ -365,7 +368,7 @@ final class SystemInfo: ObservableObject {
 
 let phonePadHost = "http://\((SCDynamicStoreCopyLocalHostName(nil) as String?) ?? "this-mac").local:2904"
 
-func launch(_ s: Settings) -> String {
+func launch(_ s: Settings, mods: [Mod]) -> String {
     FileManager.default.changeCurrentDirectoryPath(s.folder)
     for (k, v) in s.environment { setenv(k, v, 1) }
     let prevLog = logURL.deletingPathExtension().appendingPathExtension("prev.log")
@@ -378,7 +381,7 @@ func launch(_ s: Settings) -> String {
         close(fd)
     }
     let game = tool("nxhost", in: s.folderURL).path
-    var argv: [UnsafeMutablePointer<CChar>?] = ([game] + s.arguments).map { strdup($0) } + [nil]
+    var argv: [UnsafeMutablePointer<CChar>?] = ([game] + s.arguments(mods)).map { strdup($0) } + [nil]
     execv(game, &argv)
     return "Could not start the game (\(String(cString: strerror(errno))))"
 }
@@ -391,10 +394,11 @@ struct LauncherView: View {
     @State private var tick = 0
     @State private var copied: String?
     @State private var showMods = false
+    @State private var mods: [Mod] = []
 
     var body: some View {
         let _ = tick
-        let list = checks(s)
+        let list = checks(s, mods: mods)
         let ready = list.allSatisfy { $0.ok || $0.optional }
         VStack(spacing: 16) {
             HStack(spacing: 12) {
@@ -430,6 +434,9 @@ struct LauncherView: View {
         .sheet(isPresented: $showMods, onDismiss: { tick += 1 }) {
             ModsView(s: s, onInstalled: { tick += 1 })
         }
+        .onAppear { mods = installedMods(in: s.folderURL) }
+        .onChange(of: tick) { mods = installedMods(in: s.folderURL) }
+        .onChange(of: s.folder) { mods = installedMods(in: s.folderURL) }
     }
 
     func dataSection(_ list: [Check]) -> some View {
@@ -438,7 +445,7 @@ struct LauncherView: View {
                 Text(s.folder.isEmpty ? "No folder chosen" : s.folder).lineLimit(1).truncationMode(.head)
                     .foregroundStyle(s.folder.isEmpty ? .secondary : .primary)
                 Spacer()
-                Button("Choose…", action: chooseFolder)
+                Button("Choose…", action: chooseFolder).disabled(prep.running)
             }
             ForEach(list.filter { $0.id != "Mods" }) { c in
                 HStack {
@@ -638,16 +645,20 @@ struct LauncherView: View {
 
     func prepare() {
         s.save()
-        prep.run(s) { tick += 1 }
+        prep.run(s, mods: mods) { tick += 1 }
     }
 
     func play() {
+        if let mod = mods.first(where: { !s.disabledMods.contains($0.id) && !$0.loadable }) {
+            launchError = "\(mod.displayTitle) can't load: \(mod.summary). Turn it off in Mods."
+            return
+        }
         if s.network == "lanplay" && s.lanPlayServer.trimmingCharacters(in: .whitespaces).isEmpty {
             launchError = "Enter a LAN-Play server (host:port)"
             return
         }
         s.save()
-        launchError = launch(s)
+        launchError = launch(s, mods: mods)
     }
 }
 
@@ -656,6 +667,7 @@ struct ModsView: View {
     let onInstalled: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var mods: [Mod] = []
+    @State private var skipped: [String: String] = [:]
     @State private var browsing = false
     @State private var inspectedMod: Mod?
     @State private var deletingMod: Mod?
@@ -669,39 +681,10 @@ struct ModsView: View {
                         Text("No mods installed. Browse GameBanana to add one.").foregroundStyle(.secondary)
                     }
                     ForEach(mods) { m in
-                        Toggle(isOn: Binding(get: { !s.disabledMods.contains(m.id) }, set: { on in
-                            s.disabledMods.removeAll { $0 == m.id }
-                            if !on { s.disabledMods.append(m.id) }
-                        })) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(m.displayTitle).font(.body.weight(.medium))
-                                Text(m.summary).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .accessibilityLabel(m.name)
-                        .accessibilityHint(m.summary + ". Open the context menu to view files or delete.")
-                        .accessibilityAction(named: Text("View files")) { inspectedMod = m }
-                        .contextMenu {
-                            Button("View files", systemImage: "folder") { inspectedMod = m }
-                            Button("Delete", systemImage: "trash", role: .destructive) { deletingMod = m }
-                                .disabled(!canDeleteMod(m))
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button { inspectedMod = m } label: { Label("Files", systemImage: "folder") }
-                                .tint(.blue)
-                            Button(role: .destructive) { deletingMod = m } label: { Label("Delete", systemImage: "trash") }
-                                .disabled(!canDeleteMod(m))
-                        }
+                        ModRow(mod: m, disabled: $s.disabledMods, warning: patchWarning(m, skipped: skipped), inspect: { inspectedMod = m }, delete: { deletingMod = m })
                     }
                 } header: {
-                    HStack {
-                        Text("Mods")
-                        if !mods.isEmpty {
-                            Spacer()
-                            Text("\(mods.filter { !s.disabledMods.contains($0.id) }.count)/\(mods.count) active")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                    ModsHeader(mods: mods, disabled: s.disabledMods)
                 } footer: {
                     Text("Mods apply from top to bottom, so a lower mod wins when two mods change the same file. Code patches apply the next time you Prepare.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -718,15 +701,11 @@ struct ModsView: View {
         }
         .padding(20)
         .frame(width: 540, height: 420)
-        .onAppear { mods = installedMods(in: s.folderURL) }
-        .sheet(item: $inspectedMod) { mod in ModContentsView(mod: mod, folder: s.folderURL) }
-        .confirmationDialog("Delete mod?", isPresented: Binding(get: { deletingMod != nil }, set: { if !$0 { deletingMod = nil } }), presenting: deletingMod) { mod in
-            Button("Delete", role: .destructive) { deleteMod(mod) }
-            Button("Cancel", role: .cancel) { deletingMod = nil }
-        } message: { mod in Text("Permanently delete \(mod.name)? Only \(mod.path) is removed.") }
-        .alert("Mod action failed", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
-            Button("OK") { actionError = nil }
-        } message: { Text(actionError ?? "") }
+        .onAppear {
+            mods = installedMods(in: s.folderURL)
+            skipped = skippedPatches(in: s.folderURL)
+        }
+        .modActions(folder: s.folderURL, inspected: $inspectedMod, deleting: $deletingMod, error: $actionError, delete: deleteMod)
         .sheet(isPresented: $browsing) {
             ModBrowserView(folder: s.folderURL) { name in
                 s.disabledMods.removeAll { $0 == name }

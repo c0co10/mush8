@@ -94,7 +94,17 @@ fn main() -> Result<()> {
         Cmd::Rewrite { nso, out, patch } => {
             std::fs::create_dir_all(&out)?;
             let _ = std::fs::remove_file(out.join("nxpatch.stamp"));
-            let patches = patch.iter().map(|p| ips::load(p)).collect::<Result<Vec<_>>>()?;
+            let mut skipped = String::new();
+            let mut patches = Vec::new();
+            for p in &patch {
+                match ips::load(p) {
+                    Ok(c) => patches.push(c),
+                    Err(e) => {
+                        println!("skipped {}: {e:#}", p.display());
+                        writeln!(skipped, "{}\t{}", p.display(), format!("{e:#}").replace(['\t', '\n'], " "))?;
+                    }
+                }
+            }
             let mut used = vec![false; patches.len()];
             for p in nso {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
@@ -130,7 +140,9 @@ fn main() -> Result<()> {
             }
             for (c, _) in patches.iter().zip(&used).filter(|(_, u)| !**u) {
                 println!("skipped {}: it is for build {}, not this game update", c.source.display(), c.build_id);
+                writeln!(skipped, "{}\tit is for build {}, not this game update", c.source.display(), c.build_id)?;
             }
+            std::fs::write(out.join("nxpatch.skipped"), skipped)?;
             std::fs::write(out.join("nxpatch.stamp"), stamp(&patch)?)?;
         }
         Cmd::Stamp { patch } => println!("{}", stamp(&patch)?),

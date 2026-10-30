@@ -390,18 +390,7 @@ struct LauncherView: View {
                 mods = installedMods(in: docsURL)
             }
         }
-        .sheet(item: $inspectedMod) { mod in
-            ModContentsView(mod: mod, folder: docsURL)
-        }
-        .confirmationDialog("Delete mod?", isPresented: Binding(get: { deletingMod != nil }, set: { if !$0 { deletingMod = nil } }), presenting: deletingMod) { mod in
-            Button("Delete", role: .destructive) { deleteMod(mod) }
-            Button("Cancel", role: .cancel) { deletingMod = nil }
-        } message: { mod in
-            Text("Permanently delete \(mod.name)? Only \(mod.path) is removed.")
-        }
-        .alert("Mod action failed", isPresented: Binding(get: { modActionError != nil }, set: { if !$0 { modActionError = nil } })) {
-            Button("OK") { modActionError = nil }
-        } message: { Text(modActionError ?? "") }
+        .modActions(folder: docsURL, inspected: $inspectedMod, deleting: $deletingMod, error: $modActionError, delete: deleteMod)
         .onAppear {
             files.scan()
             mods = installedMods(in: docsURL)
@@ -440,47 +429,12 @@ struct LauncherView: View {
                 Text("No mods installed.").foregroundStyle(.secondary)
             }
             ForEach(mods) { mod in
-                Toggle(isOn: Binding(get: { !s.disabledMods.contains(mod.id) }, set: { enabled in
-                    s.disabledMods.removeAll { $0 == mod.id }
-                    if !enabled { s.disabledMods.append(mod.id) }
-                })) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(mod.displayTitle).font(.body.weight(.medium)).lineLimit(2)
-                        Text(mod.summary).font(.caption).foregroundStyle(.secondary)
-                        if !canDeleteMod(mod) {
-                            Text("Shared folder · view files only").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if !mod.patches.isEmpty {
-                            Text("Rebuild required on iOS").font(.caption).foregroundStyle(.orange)
-                        }
-                    }
-                }
-                .accessibilityLabel(mod.name)
-                .accessibilityHint(mod.summary + ". Swipe or long press for actions.")
-                .accessibilityAction(named: Text("View files")) { inspectedMod = mod }
-                .contextMenu {
-                    Button("View files", systemImage: "folder") { inspectedMod = mod }
-                    Button("Delete", systemImage: "trash", role: .destructive) { deletingMod = mod }
-                        .disabled(!canDeleteMod(mod))
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button { inspectedMod = mod } label: { Label("Files", systemImage: "folder") }
-                        .tint(.blue)
-                    Button(role: .destructive) { deletingMod = mod } label: { Label("Delete", systemImage: "trash") }
-                        .disabled(!canDeleteMod(mod))
-                }
+                ModRow(mod: mod, disabled: $s.disabledMods, inspect: { inspectedMod = mod }, delete: { deletingMod = mod })
             }
         } header: {
-            HStack {
-                Text("Mods")
-                if !mods.isEmpty {
-                    Spacer()
-                    Text("\(mods.filter { !s.disabledMods.contains($0.id) }.count)/\(mods.count) active")
-                        .font(.caption).foregroundStyle(.secondary).textCase(nil)
-                }
-            }
+            ModsHeader(mods: mods, disabled: s.disabledMods)
         } footer: {
-            Text("Swipe to delete; long press for files. Lower mods win conflicts. RomFS loads on Play; code patches need an iOS rebuild.")
+            Text("Swipe to delete; long press for files. Lower mods win conflicts. RomFS loads on Play; code patches don't run on iOS.")
         }
     }
 
@@ -556,8 +510,13 @@ struct LauncherView: View {
     var usesLocalNetwork: Bool { s.network == "lan" || s.network == "wireless" || s.phonePads }
 
     func start() {
-        if let mod = installedMods(in: docsURL).first(where: { !s.disabledMods.contains($0.id) && !$0.patches.isEmpty }) {
-            error = "\(mod.name) has code patches. Turn it off or rebuild the iOS app with those patches before playing."
+        let enabled = installedMods(in: docsURL).filter { !s.disabledMods.contains($0.id) }
+        if let mod = enabled.first(where: { !$0.loadable }) {
+            error = "\(mod.displayTitle) can't load: \(mod.summary). Turn it off in Mods."
+            return
+        }
+        if let mod = enabled.first(where: { !$0.patches.isEmpty }) {
+            error = "\(mod.displayTitle) has code patches, which don't run on iOS. Turn it off in Mods."
             return
         }
         if s.network == "lanplay" && s.lanPlayServer.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -597,7 +556,7 @@ public func mush8ShowLauncher(_ viewController: UnsafeMutableRawPointer, _ play:
 public func mush8EachMod(_ context: UnsafeMutableRawPointer, _ callback: @convention(c) (UnsafeMutableRawPointer, UnsafePointer<CChar>) -> Void) {
     let json = (try? Data(contentsOf: configURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     let disabled = json?["disabled_mods"] as? [String] ?? []
-    for mod in installedMods(in: docsURL) where !disabled.contains(mod.id) {
+    for mod in installedMods(in: docsURL) where !disabled.contains(mod.id) && mod.romfs && mod.loadable {
         docsURL.appendingPathComponent(mod.path).path.withCString { callback(context, $0) }
     }
 }

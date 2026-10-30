@@ -5,12 +5,13 @@ import Foundation
 enum ModInstaller {
     private static let expandedLimit: Int64 = 2 * 1024 * 1024 * 1024
     private static let entryLimit = 20_000
+    static let iOSPatchMessage = "Code patches don't run on iOS. Choose a RomFS-only mod."
 
     static func install(mod: BananaMod, file: BananaFile, in folder: URL,
                         progress: @escaping @Sendable (BananaDownloadProgress?) -> Void = { _ in }) async throws -> String {
         #if os(iOS)
         guard !["ips", "pchtxt"].contains((file.name as NSString).pathExtension.lowercased()) else {
-            throw ModError("iOS code patches require rebuilding the app on a Mac. Choose a RomFS-only mod.")
+            throw ModError(iOSPatchMessage)
         }
         #endif
         let download = FileManager.default.temporaryDirectory.appendingPathComponent("Mush8-mod-\(UUID().uuidString)")
@@ -55,7 +56,7 @@ enum ModInstaller {
             guard components.count == 1 else { throw ModError("A code patch must have a plain filename.") }
             let exefs = unpacked.appendingPathComponent("exefs", isDirectory: true)
             try fm.createDirectory(at: exefs, withIntermediateDirectories: false)
-            try fm.copyItem(at: archive, to: exefs.appendingPathComponent(file.name))
+            try fm.copyItem(at: archive, to: exefs.appendingPathComponent(try patchName(file.name)))
         } else {
             try extract(archive, to: unpacked)
         }
@@ -67,9 +68,22 @@ enum ModInstaller {
         }
         let payload = packages[0]
         try validate(payload)
+        try? fm.removeItem(at: payload.appendingPathComponent("__MACOSX"))
         try Task.checkCancellation()
         try fm.moveItem(at: payload, to: destination)
         return name
+    }
+
+    private static func patchName(_ name: String) throws -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        guard ext == "ips" else { return name }
+        let stem = (name as NSString).deletingPathExtension
+        if isBuildID(stem.split(separator: ".").first.map(String.init) ?? "") { return name }
+        let id = stem.split(whereSeparator: { !$0.isHexDigit }).map(String.init).filter { $0.count >= 32 && isBuildID($0) }.max { $0.count < $1.count }
+        guard let id else {
+            throw ModError("\(name) doesn't name the game build it patches, so Mush8 can't apply it. Choose a download whose .ips is named after a build id, or an archive with exefs_patches.")
+        }
+        return id + ".ips"
     }
 
     private static func safePath(_ name: String) throws -> [String] {
@@ -103,10 +117,10 @@ enum ModInstaller {
             try Task.checkCancellation()
             let status = archive_read_next_header(reader, &entry)
             if status == 1 { break }
-            guard status == 0, let entry else { throw failure() }
+            guard status == 0 || status == -20, let entry else { throw failure() }
             entries += 1
             guard entries <= entryLimit else { throw ModError("The archive contains more than \(entryLimit) entries.") }
-            guard let raw = archive_entry_pathname(entry), let path = String(validatingCString: raw) else {
+            guard let raw = archive_entry_pathname_utf8(entry) ?? archive_entry_pathname(entry), let path = String(validatingCString: raw) else {
                 throw ModError("The archive contains a filename that is not valid UTF-8.")
             }
             let type = archive_entry_filetype(entry)
@@ -166,24 +180,21 @@ enum ModInstaller {
         guard let mod = modInfo(at: directory, relativeTo: directory.deletingLastPathComponent(), id: directory.lastPathComponent) else {
             throw ModError("No supported mod was found.")
         }
-        guard !mod.replacedModules, mod.unsupportedFiles.isEmpty else { throw ModError("Native ExeFS modules, packed files, and .stub removal are not supported by Mush8.") }
+        guard mod.loadable else { throw ModError("Mush8 can't load this mod: \(mod.summary).") }
         #if os(iOS)
-        guard mod.patches.isEmpty else { throw ModError("iOS code patches require rebuilding the app on a Mac. Choose a RomFS-only mod.") }
+        guard mod.patches.isEmpty else { throw ModError(iOSPatchMessage) }
         #endif
-        guard let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil) else { throw ModError("Could not inspect the downloaded files.") }
+        guard let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else {
+            throw ModError("Could not inspect the downloaded files.")
+        }
         for case let file as URL in files {
             try Task.checkCancellation()
-            let path = file.path.lowercased()
-            if path.hasSuffix(".stub") || (path.contains("/romfs/skyline/plugins/") && path.hasSuffix(".nro")) {
-                throw ModError("Skyline plugins and .stub removal are not supported by Mush8.")
+            if file.lastPathComponent == "__MACOSX" {
+                files.skipDescendants()
+                continue
             }
-            if path.hasSuffix("/exefs/main.npdm") {
-                let handle = try FileHandle(forReadingFrom: file)
-                defer { try? handle.close() }
-                let data = try handle.read(upToCount: 0x20) ?? Data()
-                guard data.count >= 0x20, data.prefix(4) == Data("META".utf8), data[0xC] & 1 != 0 else {
-                    throw ModError("The mod has an invalid or ARM32 main.npdm; Mush8 requires AArch64.")
-                }
+            if ["ips", "pchtxt"].contains(file.pathExtension.lowercased()) && !isCodePatch(file) {
+                throw ModError("\(file.lastPathComponent) doesn't name the game build it patches, so Mush8 can't apply it.")
             }
         }
     }

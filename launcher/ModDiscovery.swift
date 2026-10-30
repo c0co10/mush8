@@ -16,6 +16,8 @@ struct Mod: Identifiable, Sendable {
         return String(name[..<range.lowerBound])
     }
 
+    var loadable: Bool { !replacedModules && unsupportedFiles.isEmpty }
+
     var summary: String {
         var parts: [String] = []
         if romfs { parts.append("replaces game files") }
@@ -46,6 +48,57 @@ func modEntries(_ dir: URL, directories: Bool) -> [URL] {
         .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 }
 
+func isCodePatch(_ url: URL) -> Bool {
+    switch url.pathExtension.lowercased() {
+    case "pchtxt": return patchBuildID(url).map { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isHexDigit } } ?? false
+    case "ips": return isBuildID(url.lastPathComponent.split(separator: ".").first.map(String.init) ?? "")
+    default: return false
+    }
+}
+
+func isBuildID(_ name: String) -> Bool {
+    (16...64).contains(name.count) && name.allSatisfy { $0.isASCII && $0.isHexDigit }
+}
+
+func normalizedBuildID(_ id: String) -> String {
+    String(id.trimmingCharacters(in: .whitespaces).lowercased().reversed().drop { $0 == "0" }.reversed())
+}
+
+func patchBuildID(_ url: URL) -> String? {
+    guard url.pathExtension.caseInsensitiveCompare("pchtxt") == .orderedSame else {
+        return url.lastPathComponent.split(separator: ".").first.map { normalizedBuildID(String($0)) }
+    }
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+    var id: String?
+    for line in text.split(whereSeparator: \.isNewline) {
+        let line = line.trimmingCharacters(in: .whitespaces)
+        if line.hasPrefix("@stop") { break }
+        if line.hasPrefix("@nsobid-") { id = String(line.dropFirst("@nsobid-".count)) }
+    }
+    return id.map(normalizedBuildID)
+}
+
+func gameBuildIDs(in folder: URL) -> Set<String>? {
+    #if os(iOS)
+    guard let modules = Bundle.main.resourceURL?.appendingPathComponent("modules"),
+          let names = try? FileManager.default.contentsOfDirectory(atPath: modules.path) else { return nil }
+    let ids = names.filter { $0.hasSuffix(".layout") }.compactMap { name in
+        (try? String(contentsOf: modules.appendingPathComponent(name), encoding: .utf8))?
+            .split(whereSeparator: \.isNewline).first { $0.hasPrefix("module_id ") }
+            .map { normalizedBuildID(String($0.dropFirst("module_id ".count))) }
+    }
+    #else
+    let exefs = folder.appendingPathComponent("work/v-upd/exefs")
+    let ids = ["main", "subsdk0", "sdk"].compactMap { name -> String? in
+        guard let handle = try? FileHandle(forReadingFrom: exefs.appendingPathComponent(name)) else { return nil }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 0x60), header.count == 0x60, header.prefix(4) == Data("NSO0".utf8) else { return nil }
+        return normalizedBuildID(header[0x40..<0x60].map { String(format: "%02x", $0) }.joined())
+    }
+    #endif
+    return ids.isEmpty ? nil : Set(ids)
+}
+
 func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
     func relative(_ url: URL) -> String? {
         let prefix = folder.path + "/"
@@ -70,21 +123,57 @@ func modInfo(at dir: URL, relativeTo folder: URL, id: String) -> Mod? {
     let romfs = content.flatMap { caselessChild($0, "romfs") }
     let exefs = content.flatMap { caselessChild($0, "exefs") }
     let files = exefs.map { modEntries($0, directories: false) } ?? []
-    var patches = files.filter { ["ips", "pchtxt"].contains($0.pathExtension.lowercased()) }
-    if let patchRoot = caselessChild(atmosphere ?? dir, "exefs_patches") {
-        patches += modEntries(patchRoot, directories: true).flatMap { modEntries($0, directories: false) }
-            .filter { ["ips", "pchtxt"].contains($0.pathExtension.lowercased()) }
+    var patches = files.filter(isCodePatch)
+    for patchRoot in [caselessChild(dir, "exefs_patches"), atmosphere.flatMap { caselessChild($0, "exefs_patches") }].compactMap({ $0 }) {
+        patches += modEntries(patchRoot, directories: true).flatMap { modEntries($0, directories: false) }.filter(isCodePatch)
     }
-    guard content != nil || !patches.isEmpty, let path = relative(dir) else { return nil }
+    let hasPatches = !patches.isEmpty
+    #if os(iOS)
+    let filterPatches = true
+    #else
+    let filterPatches = id.hasPrefix("./")
+    #endif
+    if filterPatches && hasPatches {
+        let game = gameBuildIDs(in: folder)
+        patches = patches.filter { patch in game.map { ids in patchBuildID(patch).map(ids.contains) ?? false } ?? false }
+    }
+    guard content != nil || hasPatches, let path = relative(dir) else { return nil }
     let patchPaths = patches.compactMap(relative)
     guard patchPaths.count == patches.count else { return nil }
+    let romfsStubs = romfs.flatMap { FileManager.default.enumerator(at: $0, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) }
+        .map { $0.compactMap { $0 as? URL }.filter { $0.pathExtension.caseInsensitiveCompare("stub") == .orderedSame } } ?? []
+    let plugins = (romfs.flatMap { caselessChild($0, "skyline") }.flatMap { caselessChild($0, "plugins") }.map { modEntries($0, directories: false) } ?? [])
+        .filter { $0.pathExtension.caseInsensitiveCompare("nro") == .orderedSame }
+    let npdm = files.first { $0.lastPathComponent.caseInsensitiveCompare("main.npdm") == .orderedSame }
+    let badNpdm = npdm.map { url in
+        let header = (try? FileHandle(forReadingFrom: url)).flatMap { handle in
+            defer { try? handle.close() }
+            return try? handle.read(upToCount: 0x20)
+        } ?? Data()
+        return !(header.count == 0x20 && header.prefix(4) == Data("META".utf8) && header[0xC] & 1 != 0)
+    } ?? false
     let unsupportedFiles = (content.map { modEntries($0, directories: false) } ?? []).filter(unsupported)
         + files.filter { $0.pathExtension.caseInsensitiveCompare("stub") == .orderedSame }
+        + romfsStubs + plugins + (badNpdm ? npdm.map { [$0] } ?? [] : [])
     return Mod(id: id, name: name, path: path, romfs: romfs != nil,
                patches: patchPaths, replacedModules: files.contains {
                    let name = $0.lastPathComponent.lowercased()
                    return ["main", "sdk", "rtld"].contains(name) || (name.hasPrefix("subsdk") && $0.pathExtension.isEmpty)
                }, unsupportedFiles: unsupportedFiles.map(\.lastPathComponent))
+}
+
+func skippedPatches(in folder: URL) -> [String: String] {
+    let text = (try? String(contentsOf: folder.appendingPathComponent("work/v-upd/patched/nxpatch.skipped"), encoding: .utf8)) ?? ""
+    return Dictionary(text.split(whereSeparator: \.isNewline).compactMap { line -> (String, String)? in
+        let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+        return parts.count == 2 ? (parts[0], parts[1]) : nil
+    }, uniquingKeysWith: { $1 })
+}
+
+func patchWarning(_ mod: Mod, skipped: [String: String]) -> String? {
+    let reasons = mod.patches.compactMap { skipped[$0] }
+    if let failed = reasons.first(where: { !$0.hasPrefix("it is for build ") }) { return "A code patch was skipped: \(failed)" }
+    return !mod.patches.isEmpty && reasons.count == mod.patches.count ? "No code patch matches this game update" : nil
 }
 
 func installedMods(in folder: URL) -> [Mod] {
