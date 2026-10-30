@@ -277,7 +277,6 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity)
             Form {
                 if !files.ready { gameFilesSection }
-                modsSection
                 Section {
                     Picker("Mode", selection: $s.network) {
                         Text("Off").tag("off")
@@ -315,6 +314,7 @@ struct LauncherView: View {
                         ? "After you press Play, other phones on the same Wi-Fi can open this address in their browser and join as players. The IP can change"
                         : "Nearby iPhones can join as players with \"Use as a controller\"")
                 }
+                modsSection
                 Section {
                     Picker("Console mode", selection: $s.handheld) {
                         Text("Docked (1080p)").tag(false)

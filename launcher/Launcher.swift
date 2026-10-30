@@ -404,7 +404,7 @@ struct LauncherView: View {
             }
             Form {
                 if !ready { dataSection(list) }
-                settingsSection
+                settingsSection(list)
                 systemSection
                 if ready { dataSection(list) }
             }
@@ -440,17 +440,13 @@ struct LauncherView: View {
                 Spacer()
                 Button("Choose…", action: chooseFolder)
             }
-            ForEach(list) { c in
+            ForEach(list.filter { $0.id != "Mods" }) { c in
                 HStack {
                     Image(systemName: c.ok ? "checkmark.circle.fill" : c.optional ? "minus.circle" : "xmark.circle")
                         .foregroundStyle(c.ok ? .green : c.optional ? .secondary : .red)
                     Text(c.id)
                     Spacer()
                     Text(c.detail).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    if c.id == "Mods" {
-                        Button("Customize…") { showMods = true }
-                            .disabled(s.folder.isEmpty || prep.running)
-                    }
                 }
             }
         }
@@ -472,7 +468,7 @@ struct LauncherView: View {
         }
     }
 
-    @ViewBuilder var settingsSection: some View {
+    @ViewBuilder func settingsSection(_ list: [Check]) -> some View {
         Section {
             Picker("Mode", selection: $s.network) {
                 Text("Off").tag("off")
@@ -510,6 +506,16 @@ struct LauncherView: View {
                 ? "After you press Play, other phones on the same Wi-Fi can open one of these addresses in their browser and join as players. The name stays the same, the IP can change"
                 : "Nearby iPhones can join as players with \"Use as a controller\"")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+        if let mods = list.first(where: { $0.id == "Mods" }) {
+            Section("Mods") {
+                HStack {
+                    Text(mods.detail).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Customize…") { showMods = true }
+                        .disabled(s.folder.isEmpty || prep.running)
+                }
+            }
         }
         Section {
             Picker("Console mode", selection: Binding(get: { s.handheld ? 2 : s.uhd ? 1 : 0 }, set: { s.handheld = $0 == 2; s.uhd = $0 == 1 })) {
