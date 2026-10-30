@@ -279,6 +279,7 @@ final class Preparer: ObservableObject {
                 } else {
                     self.running = false
                     self.error = "\(exe.lastPathComponent) failed: \(self.line)"
+                    done()
                 }
             }
         }
@@ -437,6 +438,7 @@ struct LauncherView: View {
         .onAppear { mods = installedMods(in: s.folderURL) }
         .onChange(of: tick) { mods = installedMods(in: s.folderURL) }
         .onChange(of: s.folder) { mods = installedMods(in: s.folderURL) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in tick += 1 }
     }
 
     func dataSection(_ list: [Check]) -> some View {
@@ -645,10 +647,16 @@ struct LauncherView: View {
 
     func prepare() {
         s.save()
+        mods = installedMods(in: s.folderURL)
         prep.run(s, mods: mods) { tick += 1 }
     }
 
     func play() {
+        mods = installedMods(in: s.folderURL)
+        guard checks(s, mods: mods).allSatisfy({ $0.ok || $0.optional }) else {
+            launchError = "Your game files or mods changed. Prepare again before playing."
+            return
+        }
         if let mod = mods.first(where: { !s.disabledMods.contains($0.id) && !$0.loadable }) {
             launchError = "\(mod.displayTitle) can't load: \(mod.summary). Turn it off in Mods."
             return
@@ -701,10 +709,8 @@ struct ModsView: View {
         }
         .padding(20)
         .frame(width: 540, height: 420)
-        .onAppear {
-            mods = installedMods(in: s.folderURL)
-            skipped = skippedPatches(in: s.folderURL)
-        }
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in reload() }
         .modActions(folder: s.folderURL, inspected: $inspectedMod, deleting: $deletingMod, error: $actionError, delete: deleteMod)
         .sheet(isPresented: $browsing) {
             ModBrowserView(folder: s.folderURL) { name in
@@ -714,6 +720,11 @@ struct ModsView: View {
                 onInstalled()
             }
         }
+    }
+
+    func reload() {
+        mods = installedMods(in: s.folderURL)
+        skipped = skippedPatches(in: s.folderURL)
     }
 
     func deleteMod(_ mod: Mod) {
